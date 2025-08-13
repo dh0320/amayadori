@@ -1,0 +1,157 @@
+/* ===== Amayadori mock styles (scoped) ===== */
+.amayadori-root {
+  --background-start: #1a1a2e;
+  --background-end: #12121c;
+  --accent-start: #6b73ff;
+  --accent-end: #a777e3;
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+
+  font-family: var(--font-inter, Inter), system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans JP', sans-serif;
+  background: linear-gradient(135deg, var(--background-start), var(--background-end));
+  color: var(--text-primary);
+  width: 100vw; height: 100vh; overflow: hidden;
+  position: relative;
+}
+
+/* 雨のアニメーションレイヤー調整 */
+.amayadori-root #rain-container {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1;
+}
+.amayadori-root .rain-drop {
+  position: absolute; bottom: 100%;
+  background: linear-gradient(to top, rgba(255,255,255,0) 0%, rgba(255,255,255,0.2) 100%);
+  animation: fall linear infinite;
+}
+@keyframes fall { to { transform: translateY(120vh); } }
+
+/* 扉アニメーション */
+.amayadori-root #door-animation { perspective: 1500px; }
+.amayadori-root .door {
+  position: absolute; top: 0; width: 50.5%; height: 100%;
+  background-color: #12121c;
+  background-image: linear-gradient(to right, rgba(0,0,0,0.4) 0%, rgba(255,255,255,0.05) 50%, rgba(0,0,0,0.4) 100%);
+  transition: transform 1.2s cubic-bezier(0.8, 0, 0.2, 1);
+}
+.amayadori-root .door.left { left: 0; transform-origin: left; }
+.amayadori-root .door.right { right: 0; transform-origin: right; }
+.amayadori-root #door-animation.open .left { transform: rotateY(-110deg); }
+.amayadori-root #door-animation.open .right { transform: rotateY(110deg); }
+
+/* グラスモーフィズムスタイル */
+.amayadori-root .glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+/* チャット画面の背景 */
+.amayadori-root #chat-screen.glass-card {
+  background: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)),
+    url('https://storage.googleapis.com/dh_character_images/Amayadori/%E3%82%AB%E3%83%95%E3%82%A7%E8%83%8C%E6%99%AF') center/cover;
+  backdrop-filter: blur(0px);
+}
+.amayadori-root #chat-screen header,
+.amayadori-root #chat-screen footer {
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+
+/* 入力欄 */
+.amayadori-root .input-glass {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 0.75rem; transition: all 0.3s ease; color: var(--text-primary);
+}
+.amayadori-root .input-glass:focus {
+  outline: none; border-color: var(--accent-start); box-shadow: 0 0 0 2px var(--accent-start);
+}
+.amayadori-root .input-glass::placeholder { color: var(--text-secondary); }
+
+/* メッセージ入力欄 */
+.amayadori-root .message-textarea {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 0.75rem; transition: all 0.3s ease; resize: none;
+  overflow-y: hidden; max-height: 120px; color: var(--text-primary);
+}
+.amayadori-root .message-textarea:focus {
+  outline: none; border-color: var(--accent-start); box-shadow: 0 0 0 2px var(--accent-start);
+}
+.amayadori-root .message-textarea::placeholder { color: var(--text-secondary); }
+
+/* カスタムボタン */
+.amayadori-root .btn-gradient {
+  background-image: linear-gradient(to right, var(--accent-start) 0%, var(--accent-end) 51%, var(--accent-start) 100%);
+  background-size: 200% auto; transition: all 0.3s ease;
+}
+.amayadori-root .btn-gradient:hover {
+  background-position: right center; transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(107, 115, 255, 0.4);
+}
+.amayadori-root .btn-secondary {
+  background: var(--glass-bg); border: 1px solid var(--glass-border); transition: all 0.3s ease;
+}
+.amayadori-root .btn-secondary:hover {
+  background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);
+}
+
+/* 退室ボタン */
+.amayadori-root .btn-exit {
+  background-color: rgba(239,68,68,0.15); color: #f87171;
+  padding: 0.5rem 1rem; border-radius: 0.75rem; font-weight: 500;
+  transition: all 0.2s ease; border: 1px solid rgba(239,68,68,0.3);
+}
+.amayadori-root .btn-exit:hover {
+  background-color: rgba(239,68,68,0.3); color: #ef4444; border-color: rgba(239,68,68,0.5);
+}
+
+/* チャットバブル */
+.amayadori-root .chat-bubble {
+  max-width: 70%; padding: 0.75rem 1.25rem; margin-bottom: 0.5rem;
+  word-wrap: break-word; opacity: 0; transform: translateY(20px);
+  animation: pop-in 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+.amayadori-root .chat-bubble p { white-space: pre-wrap; }
+@keyframes pop-in { to { opacity: 1; transform: translateY(0); } }
+.amayadori-root .chat-bubble.me {
+  background: linear-gradient(to right, var(--accent-start), var(--accent-end));
+  color: white; border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+}
+.amayadori-root .chat-bubble.other {
+  background: rgba(10,10,20,0.8); border: 1px solid var(--glass-border);
+  border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+}
+
+/* 話題の提案ボタン */
+.amayadori-root .suggestion-btn {
+  padding: 0.25rem 0.75rem; font-size: 0.875rem; border-radius: 9999px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  color: var(--text-primary); transition: all 0.2s ease; cursor: pointer; flex-shrink: 0;
+}
+.amayadori-root .suggestion-btn:hover {
+  background: rgba(255,255,255,0.2); transform: translateY(-1px);
+}
+
+/* スクロールバー */
+.amayadori-root #chat-messages::-webkit-scrollbar,
+.amayadori-root .message-textarea::-webkit-scrollbar { width: 6px; }
+.amayadori-root #chat-messages::-webkit-scrollbar-track,
+.amayadori-root .message-textarea::-webkit-scrollbar-track { background: transparent; }
+.amayadori-root #chat-messages::-webkit-scrollbar-thumb,
+.amayadori-root .message-textarea::-webkit-scrollbar-thumb {
+  background-color: var(--glass-border); border-radius: 10px;
+}
+
+/* アニメーション */
+.amayadori-root .fade-in { animation: fadeIn 1s ease-in-out forwards; }
+.amayadori-root .fade-out { animation: fadeOut 1s ease-in-out forwards; }
+@keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes fadeOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.95); } }
+.amayadori-root .spinner { border-color: rgba(255,255,255,0.2); border-top-color: var(--accent-start); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
