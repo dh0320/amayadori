@@ -2,9 +2,5 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 必要に応じて全ページ共通のカスタムをここに追加 */
-body {
-  @apply bg-white text-black;
-}
-
-/* 全ページ共通フォント（Interなど）を使うならここに */
+/* 全体のデフォルト（必要なら）*/
+body { @apply bg-white text-black; }
