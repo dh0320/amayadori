@@ -1,4 +1,3 @@
-// app/chat/page.tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,7 +13,6 @@ import {
   query,
   serverTimestamp,
   Timestamp,
-  type DocumentData,
 } from 'firebase/firestore';
 import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth, db, ensureAnon } from '@/lib/firebase';
@@ -35,34 +33,27 @@ const conversationStarters = [
   '何か面白い話、ありますか？',
 ];
 
-type ChatMsg = {
-  id: string;
-  text: string;
-  uid: string;
-  createdAt?: Timestamp;
-};
+type ChatMsg = { id: string; text: string; uid: string; createdAt?: Timestamp };
 
 export default function ChatPage() {
   const r = useRouter();
-  const params = useSearchParams();
-  const roomId = params.get('room') || '';
+  const sp = useSearchParams();
+  const roomId = sp.get('room') || '';
 
-  // 自分の表示情報（プロフィール画面で保存しておくと綺麗に出ます）
+  // 自分の表示情報（プロフィール画面で localStorage 保存している想定）
   const [meNick, setMeNick] = useState('あなた');
-  const [meIcon, setMeIcon] = useState<string>('');
+  const [meIcon, setMeIcon] = useState('');
   const [meProfile, setMeProfile] = useState('...');
 
-  // 画面要素
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
-  const [roomName, setRoomName] = useState('Cafe Amayadori');
-  const [memberLabel, setMemberLabel] = useState('オーナーとあなた'); // ヘッダ右側
+  const [memberLabel, setMemberLabel] = useState('オーナーとあなた');
+
   const [doorOpen, setDoorOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(true);
-
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // 雨アニメのドロップ
+  // 雨アニメ粒
   const drops = useMemo(
     () =>
       Array.from({ length: 100 }).map((_, i) => {
@@ -76,37 +67,26 @@ export default function ChatPage() {
     []
   );
 
-  // 初期化：匿名ログイン・プロフィール復元・部屋購読
   useEffect(() => {
     (async () => {
       if (!roomId) return;
-
       await ensureAnon();
-      // プロフィール（ローカル保存分があれば使う）
+
+      // localStorage から見た目用プロフィール
       try {
-        const n = localStorage.getItem('amayadori_nickname');
-        const p = localStorage.getItem('amayadori_profile');
-        const i = localStorage.getItem('amayadori_icon');
-        if (n) setMeNick(n);
-        if (p) setMeProfile(p);
-        if (i) setMeIcon(i);
+        setMeNick(localStorage.getItem('amayadori_nickname') || 'あなた');
+        setMeProfile(localStorage.getItem('amayadori_profile') || '...');
+        setMeIcon(localStorage.getItem('amayadori_icon') || '');
       } catch {}
 
-      // ルーム情報（ヘッダの参加者表示用）
-      const roomRef = doc(db, 'rooms', roomId);
-      const roomSnap = await getDoc(roomRef);
+      // 参加者表示
+      const roomSnap = await getDoc(doc(db, 'rooms', roomId));
       if (roomSnap.exists()) {
-        const data = roomSnap.data() as DocumentData;
-        const members: string[] = data.members || [];
-        if (members.includes('ownerAI') && members.length === 2) {
-          setMemberLabel('オーナーとあなた');
-        } else if (members.length === 2) {
-          setMemberLabel('相手とあなた');
-        } else if (members.length >= 3) {
-          setMemberLabel(`他${members.length - 1}人とあなた`);
-        } else {
-          setMemberLabel('あなた');
-        }
+        const ms: string[] = (roomSnap.data() as any).members || [];
+        if (ms.includes('ownerAI') && ms.length === 2) setMemberLabel('オーナーとあなた');
+        else if (ms.length === 2) setMemberLabel('相手とあなた');
+        else if (ms.length >= 3) setMemberLabel(`他${ms.length - 1}人とあなた`);
+        else setMemberLabel('あなた');
       }
 
       // メッセージ購読
@@ -115,8 +95,8 @@ export default function ChatPage() {
         orderBy('createdAt', 'asc'),
         limit(200)
       );
-      const unsub = onSnapshot(q, (snap) => {
-        const list: ChatMsg[] = snap.docs.map((d) => {
+      const unsub = onSnapshot(q, (ss) => {
+        const list: ChatMsg[] = ss.docs.map((d) => {
           const v = d.data() as any;
           return { id: d.id, text: v.text, uid: v.uid, createdAt: v.createdAt };
         });
@@ -126,7 +106,6 @@ export default function ChatPage() {
     })();
   }, [roomId]);
 
-  // UIユーティリティ
   function autoResize() {
     const el = taRef.current;
     if (!el) return;
@@ -139,11 +118,8 @@ export default function ChatPage() {
       el.style.height = `${el.scrollHeight}px`;
     }
   }
-  function playDoor() {
-    setDoorOpen(true);
-    setTimeout(() => setDoorOpen(false), 1300);
-  }
-  function threeSuggestions(): string[] {
+
+  function threeSuggestions() {
     const s = [...conversationStarters];
     for (let i = s.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -152,7 +128,6 @@ export default function ChatPage() {
     return s.slice(0, 3);
   }
 
-  // 送信
   async function send() {
     const text = draft.trim();
     if (!text || !roomId) return;
@@ -168,21 +143,19 @@ export default function ChatPage() {
     setTimeout(() => taRef.current?.focus(), 0);
   }
 
-  // 退室（Cloud Functions）
   async function leave() {
     try {
       await ensureAnon();
-      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'leaveRoom');
-      await fn({ roomId });
+      await httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'leaveRoom')({ roomId });
     } catch (e) {
-      // 失敗しても画面は戻す
       console.error(e);
     }
-    playDoor();
+    setDoorOpen(true);
+    setTimeout(() => setDoorOpen(false), 1300);
     setTimeout(() => r.push('/amayadori'), 600);
   }
 
-  const myUid = auth.currentUser?.uid || 'me';
+  const myUid = auth.currentUser?.uid;
 
   return (
     <div className="w-full h-full overflow-hidden">
@@ -203,145 +176,125 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* ルーム */}
-      <div className="relative z-10 w-full h-full flex flex-col glass-card">
-        {/* ヘッダ（モックと同じ） */}
-        <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center space-x-3">
-            <img
-              className="w-10 h-10 rounded-full object-cover"
-              src={meIcon || DEFAULT_USER_ICON}
-              alt="user icon"
-            />
-            <div>
-              <p className="font-bold">{meNick}</p>
-              <p className="text-xs text-gray-400">{meProfile}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <h2 className="text-lg font-bold">Cafe Amayadori</h2>
-              <p className="text-sm text-gray-400">{memberLabel}</p>
-            </div>
-            <button className="btn-exit" onClick={leave}>
-              退室
-            </button>
-          </div>
-        </header>
-
-        {/* メッセージエリア */}
-        <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
-          {/* AIオーナーのウェルカム（実メッセージが無い時にだけ演出として表示） */}
-          {msgs.length === 0 && (
-            <div className="flex items-end gap-2 justify-start">
-              <img className="w-8 h-8 rounded-full object-cover" src={OWNER_ICON} alt="" />
-              <div className="chat-bubble other">
-                <span className="block text-xs font-bold mb-1 text-purple-300">オーナー</span>
-                <p>いらっしゃい。雨宿りかな？</p>
+      {/* ここが重要：globals.css が参照する id 名を /amayadori と完全一致させる */}
+      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
+        <div id="chat-screen" className="w-full h-full flex flex-col glass-card">
+          {/* ヘッダ */}
+          <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center space-x-3">
+              <img className="w-10 h-10 rounded-full object-cover" src={meIcon || DEFAULT_USER_ICON} alt="" />
+              <div>
+                <p className="font-bold">{meNick}</p>
+                <p className="text-xs text-gray-400">{meProfile}</p>
               </div>
             </div>
-          )}
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <h2 className="text-lg font-bold">Cafe Amayadori</h2>
+                <p className="text-sm text-gray-400">{memberLabel}</p>
+              </div>
+              <button className="btn-exit" onClick={leave}>退室</button>
+            </div>
+          </header>
 
-          {msgs.map((m) => {
-            const isMe = m.uid === myUid;
-            return (
-              <div key={m.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
-                {!isMe && (
-                  <img
-                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                    src={OWNER_ICON}
-                    alt=""
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON;
-                    }}
-                  />
-                )}
-                <div className={`chat-bubble ${isMe ? 'me' : 'other'}`}>
-                  {!isMe && <span className="block text-xs font-bold mb-1 text-purple-300">相手</span>}
-                  <p>{m.text}</p>
+          {/* メッセージ */}
+          <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
+            {/* 最初の演出（実メッセージが無いとき） */}
+            {msgs.length === 0 && (
+              <div className="flex items-end gap-2 justify-start">
+                <img className="w-8 h-8 rounded-full object-cover" src={OWNER_ICON} alt="" />
+                <div className="chat-bubble other">
+                  <span className="block text-xs font-bold mb-1 text-purple-300">オーナー</span>
+                  <p>いらっしゃい。雨宿りかな？</p>
                 </div>
-                {isMe && (
-                  <img
-                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                    src={meIcon || DEFAULT_USER_ICON}
-                    alt=""
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON;
-                    }}
-                  />
-                )}
               </div>
-            );
-          })}
-        </main>
+            )}
 
-        {/* フッター（提案チップ＋入力欄） */}
-        <footer className="p-4 flex-shrink-0">
-          {showSuggestions && (
-            <div className="flex-wrap justify-center gap-2 mb-3 flex">
-              {threeSuggestions().map((t) => (
-                <button
-                  key={t}
-                  className="suggestion-btn"
-                  onClick={() => {
-                    setDraft(t);
-                    setShowSuggestions(false);
-                    setTimeout(() => taRef.current?.focus(), 0);
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          )}
+            {msgs.map((m) => {
+              const isMe = myUid && m.uid === myUid;
+              return (
+                <div key={m.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                  {!isMe && (
+                    <img
+                      className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                      src={OWNER_ICON}
+                      alt=""
+                      onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON)}
+                    />
+                  )}
+                  <div className={`chat-bubble ${isMe ? 'me' : 'other'}`}>
+                    {!isMe && <span className="block text-xs font-bold mb-1 text-purple-300">相手</span>}
+                    <p>{m.text}</p>
+                  </div>
+                  {isMe && (
+                    <img
+                      className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                      src={meIcon || DEFAULT_USER_ICON}
+                      alt=""
+                      onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON)}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </main>
 
-          <div className="flex items-center space-x-3">
-            <textarea
-              ref={taRef}
-              className="flex-1 px-4 py-3 message-textarea"
-              placeholder="メッセージを送信..."
-              rows={1}
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                autoResize();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
-            <button
-              className="w-12 h-12 rounded-full text-white flex items-center justify-center btn-gradient flex-shrink-0"
-              onClick={send}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+          {/* フッター */}
+          <footer className="p-4 flex-shrink-0">
+            {showSuggestions && (
+              <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
+                {threeSuggestions().map((t) => (
+                  <button
+                    key={t}
+                    className="suggestion-btn"
+                    onClick={() => {
+                      setDraft(t);
+                      setShowSuggestions(false);
+                      setTimeout(() => taRef.current?.focus(), 0);
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center space-x-3">
+              <textarea
+                ref={taRef}
+                className="flex-1 px-4 py-3 message-textarea"
+                placeholder="メッセージを送信..."
+                rows={1}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  autoResize();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+              />
+              <button
+                className="w-12 h-12 rounded-full text-white flex items-center justify-center btn-gradient flex-shrink-0"
+                onClick={send}
               >
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
-            </button>
-          </div>
-        </footer>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </button>
+            </div>
+          </footer>
+        </div>
       </div>
 
-      {/* 扉アニメーション（共通演出） */}
+      {/* 扉 */}
       <div
         id="door-animation"
-        className={`fixed inset-0 z-50 flex pointer-events-none ${doorOpen ? 'open' : ''} ${
-          doorOpen ? '' : 'hidden'
-        }`}
+        className={`fixed inset-0 z-50 flex pointer-events-none ${doorOpen ? 'open' : ''} ${doorOpen ? '' : 'hidden'}`}
       >
         <div className="door left"></div>
         <div className="door right"></div>
