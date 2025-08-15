@@ -47,12 +47,12 @@ export default function Page() {
   // 待機
   const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
   const [ownerPrompt, setOwnerPrompt] = useState(false);
-  const waitingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 直近のエントリ監視を解除するために保持
+  // 直近のエントリ監視解除用
   const entryUnsubRef = useRef<(() => void) | null>(null);
 
-  // チャット
+  // チャット（モック）
   const [roomName, setRoomName] = useState('Cafe Amayadori');
   const [userCount, setUserCount] = useState('オーナーとあなた');
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -123,10 +123,10 @@ export default function Page() {
     toScreen('region');
   }
 
-  // ▼▼▼ ここが“地域ボタンで発火”する本番処理 ▼▼▼
+  // ▼▼▼ 方法A：毎回 addDoc して“その1件だけ”を監視 ▼▼▼
   async function handleJoin(queueKey: 'country' | 'global') {
     try {
-      // 1) 匿名ログインを担保
+      // 1) 匿名ログイン担保
       await ensureAnon();
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('auth unavailable');
@@ -135,29 +135,31 @@ export default function Page() {
       setOwnerPrompt(false);
       toScreen('waiting');
 
-      // 3) 既存の監視を止める（連打対策）
+      // 3) 既存の監視を停止（連打対策）
       if (entryUnsubRef.current) {
         entryUnsubRef.current();
         entryUnsubRef.current = null;
       }
 
-      // 4) エントリ作成（TTL 2分）
+      // 4) エントリ作成（常に新規：TTL 約2分）
       const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
       const ref = await addDoc(collection(db, 'matchEntries'), {
         uid,
-        queueKey,                 // 'country' or 'global'（テストはこれで十分）
-        status: 'queued',         // 関数側が相手を見つけたら 'matched' に更新
+        queueKey,              // 'country' | 'global'
+        status: 'queued',      // Functions が 'matched' に更新
         createdAt: serverTimestamp(),
         expiresAt,
       });
       console.log('[join] entry created:', ref.id, { uid, queueKey });
 
-      // 5) マッチ結果を監視（matchedになったら /chat?room=... へ）
+      // 5) 自分の1件だけを監視 → matched で /chat へ
       entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', ref.id), (snap) => {
         const d = snap.data() as any | undefined;
         if (!d) return;
         if (d.status === 'matched' && d.roomId) {
           console.log('[join] matched! room =', d.roomId);
+          entryUnsubRef.current?.();
+          entryUnsubRef.current = null;
           router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
         }
         if (d.status === 'denied') {
@@ -165,7 +167,7 @@ export default function Page() {
         }
       });
 
-      // 6) 20秒待って相手がいなければオーナー提案（UIはそのまま）
+      // 6) 20秒待って相手がいなければオーナー提案
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
     } catch (e: any) {
@@ -229,7 +231,7 @@ export default function Page() {
     toScreen('profile');
   }
 
-  // チャット送信（BOT返信）
+  // チャット送信（モックのBOT返信）
   function send() {
     const text = draft.trim();
     if (!text) return;
