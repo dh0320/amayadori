@@ -2,5 +2,112 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 全体のデフォルト（必要なら）*/
-body { @apply bg-white text-black; }
+/* ====== ベース ====== */
+:root{
+  --glass-bg: rgba(18,18,20,.72);
+  --glass-border: rgba(255,255,255,.08);
+  --glass-border-2: rgba(255,255,255,.12);
+  --fg-soft: rgba(255,255,255,.75);
+  --fg-dim: #9ca3af;
+}
+
+* { box-sizing: border-box; }
+html, body, #__next { height: 100%; }
+body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
+
+/* ====== 共有レイアウト（背景・雨・ガラス） ====== */
+#app-container { position: relative; width: 100%; height: 100%; }
+#app-container::before{
+  /* カフェ背景 */
+  content:"";
+  position:absolute; inset:0;
+  background: url("https://storage.googleapis.com/dh_character_images/Amayadori/cafe_bg.jpg")
+              center/cover no-repeat fixed;
+  opacity:.9; filter:saturate(1.05);
+  z-index: 0;
+}
+
+.glass-card{
+  position: relative; z-index: 1;
+  background: var(--glass-bg);
+  border:1px solid var(--glass-border);
+  border-radius:18px;
+  box-shadow:0 18px 40px rgba(0,0,0,.45);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+
+/* ドア（遷移アニメーション） */
+#door-animation .door{
+  flex:1; background:#0b0f14;
+  box-shadow: inset 0 0 80px rgba(0,0,0,.6);
+  transition: transform .6s ease;
+}
+#door-animation .left{ transform: translateX(-100%); }
+#door-animation .right{ transform: translateX(100%); }
+#door-animation.open .left{ transform: translateX(0); }
+#door-animation.open .right{ transform: translateX(0); }
+
+/* 雨 */
+#rain-container{ position:fixed; inset:0; pointer-events:none; z-index: 0; }
+.rain-drop{
+  position:absolute; top:-15vh;
+  background: linear-gradient(#ffffffcc, #ffffff00);
+  width:2px; height:80px; opacity:.45;
+  animation: rain .9s linear infinite;
+}
+@keyframes rain{ to{ transform: translate3d(0,120vh,0); } }
+
+/* ====== UI パーツ ====== */
+.btn-gradient{
+  background: linear-gradient(135deg,#7c5cff,#a66bff);
+  @apply px-4 py-2 rounded-xl font-semibold shadow;
+}
+.btn-secondary{
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--glass-border-2);
+  @apply px-4 py-2 rounded-xl font-semibold;
+}
+.btn-exit{
+  @apply px-4 py-2 rounded-lg font-semibold;
+  background:#a33; color:#fff;
+}
+
+.input-glass, .message-textarea{
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--glass-border-2);
+  @apply rounded-xl outline-none text-white;
+}
+.message-textarea{ resize:none; min-height:3rem; }
+
+.suggestion-btn{
+  background: rgba(255,255,255,.08);
+  border:1px solid var(--glass-border-2);
+  @apply px-3 py-1.5 rounded-full text-sm;
+}
+.fade-in{ animation: fadein .25s ease; }
+@keyframes fadein { from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:none;} }
+
+.spinner{
+  border-top-color: transparent;
+  border-color: rgba(255,255,255,.25);
+  border-top: 4px solid rgba(255,255,255,.9);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ====== チャット吹き出し ====== */
+.chat-bubble{
+  max-width:72%;
+  @apply px-4 py-3 rounded-2xl leading-relaxed text-[15px];
+}
+.chat-bubble.other{
+  background: rgba(255,255,255,.08);
+  border: 1px solid var(--glass-border-2);
+}
+.chat-bubble.me{
+  background: linear-gradient(135deg,#7c5cff,#9b6bff);
+  color:#fff;
+}
+
+/* スクロール面の微調整 */
+#chat-messages{ scrollbar-gutter: stable; }
