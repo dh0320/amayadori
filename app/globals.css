@@ -21,7 +21,7 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
   /* カフェ背景 */
   content:"";
   position:absolute; inset:0;
-  background: url("https://storage.googleapis.com/amayadori/cafebackground.png")
+  background: url("https://storage.googleapis.com/dh_character_images/Amayadori/cafe_bg.jpg")
               center/cover no-repeat fixed;
   opacity:.9; filter:saturate(1.05);
   z-index: 0;
