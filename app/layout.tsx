@@ -3,14 +3,15 @@ import './globals.css'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'My App',
-  description: 'Next.js app',
+  title: 'Cafe Amayadori',
+  description: '雨がやむまで、少しだけ。',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      {/* 背景・文字色は globals.css で統一 */}
+      <body className="min-h-screen">{children}</body>
     </html>
   )
 }
