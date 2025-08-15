@@ -18,9 +18,9 @@ import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth, db, ensureAnon } from '@/lib/firebase';
 
 const DEFAULT_USER_ICON =
-  'https://storage.googleapis.com/dh_character_images/Amayadori/%E3%82%A2%E3%82%A4%E3%82%B3%E3%83%B3%E3%81%AA%E3%81%97.png';
+  'https://storage.googleapis.com/amayadori/defaultIcon.png';
 const OWNER_ICON =
-  'https://storage.googleapis.com/dh_character_images/Amayadori/%E3%82%AB%E3%83%95%E3%82%A7%E3%82%AA%E3%83%BC%E3%83%8A%E3%83%BC';
+  'https://storage.googleapis.com/amayadori/cafeownerIcon.png';
 
 const conversationStarters = [
   'おすすめのコーヒーは？',
