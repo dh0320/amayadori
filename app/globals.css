@@ -2,13 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ====== ベース ====== */
+/* ====== ベース（トークン） ====== */
 :root{
   --glass-bg: rgba(18,18,20,.72);
   --glass-border: rgba(255,255,255,.08);
   --glass-border-2: rgba(255,255,255,.12);
   --fg-soft: rgba(255,255,255,.75);
   --fg-dim: #9ca3af;
+
+  /* 追加トークン（テーマで上書き可能） */
+  --accent-start: #7c5cff;
+  --accent-end:   #a66bff;
+  --text-primary: rgba(255,255,255,.92);
+  --text-secondary: #9ca3af;
+  --background-start: #0b0f14;
+  --background-end:   #0b0f14;
 }
 
 * { box-sizing: border-box; }
@@ -16,6 +24,7 @@ html, body, #__next { height: 100%; }
 body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
 
 /* ====== 共有レイアウト（背景・雨・ガラス） ====== */
+/* （他ページで使用。/amayadori は下のテーマ側で背景を持つので競合しません） */
 #app-container { position: relative; width: 100%; height: 100%; }
 #app-container::before{
   /* カフェ背景 */
@@ -36,7 +45,7 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
   backdrop-filter: blur(10px) saturate(120%);
 }
 
-/* ドア（遷移アニメーション） */
+/* ドア（遷移アニメーション：ベース挙動） */
 #door-animation .door{
   flex:1; background:#0b0f14;
   box-shadow: inset 0 0 80px rgba(0,0,0,.6);
@@ -47,7 +56,7 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
 #door-animation.open .left{ transform: translateX(0); }
 #door-animation.open .right{ transform: translateX(0); }
 
-/* 雨 */
+/* 雨（ベース） */
 #rain-container{ position:fixed; inset:0; pointer-events:none; z-index: 0; }
 .rain-drop{
   position:absolute; top:-15vh;
@@ -57,7 +66,7 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
 }
 @keyframes rain{ to{ transform: translate3d(0,120vh,0); } }
 
-/* ====== UI パーツ ====== */
+/* ====== 共通 UI パーツ ====== */
 .btn-gradient{
   background: linear-gradient(135deg,#7c5cff,#a66bff);
   @apply px-4 py-2 rounded-xl font-semibold shadow;
@@ -95,7 +104,7 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ====== チャット吹き出し ====== */
+/* ====== チャット吹き出し（共通） ====== */
 .chat-bubble{
   max-width:72%;
   @apply px-4 py-3 rounded-2xl leading-relaxed text-[15px];
@@ -111,3 +120,196 @@ body { @apply min-h-screen text-white antialiased; background: #0b0f14; }
 
 /* スクロール面の微調整 */
 #chat-messages{ scrollbar-gutter: stable; }
+
+/* =========================================================
+   Amayadori テーマ（/amayadori 配下・互換のため .amayadori-root も許容）
+   ========================================================= */
+.theme-amayadori, .amayadori-root {
+  --background-start: #1a1a2e;
+  --background-end: #12121c;
+  --accent-start: #6b73ff;
+  --accent-end: #a777e3;
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+
+  font-family: var(--font-inter, Inter), system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans JP', sans-serif;
+  background: linear-gradient(135deg, var(--background-start), var(--background-end));
+  color: var(--text-primary);
+  width: 100vw; height: 100vh; overflow: hidden;
+  position: relative;
+}
+
+/* 雨（テーマのレイヤーと見た目） */
+.theme-amayadori #rain-container,
+.amayadori-root #rain-container {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1;
+}
+.theme-amayadori .rain-drop,
+.amayadori-root .rain-drop {
+  position: absolute; bottom: 100%;
+  background: linear-gradient(to top, rgba(255,255,255,0) 0%, rgba(255,255,255,0.2) 100%);
+  animation: fall linear infinite;
+}
+@keyframes fall { to { transform: translateY(120vh); } }
+
+/* 扉（テーマでは3D回転に差し替え） */
+.theme-amayadori #door-animation,
+.amayadori-root #door-animation { perspective: 1500px; }
+.theme-amayadori #door-animation .door,
+.amayadori-root #door-animation .door {
+  position: absolute; top: 0; width: 50.5%; height: 100%;
+  background-color: #12121c;
+  background-image: linear-gradient(to right, rgba(0,0,0,0.4) 0%, rgba(255,255,255,0.05) 50%, rgba(0,0,0,0.4) 100%);
+  transition: transform 1.2s cubic-bezier(0.8, 0, 0.2, 1);
+}
+.theme-amayadori #door-animation .door.left,
+.amayadori-root #door-animation .door.left { left: 0; transform-origin: left; }
+.theme-amayadori #door-animation .door.right,
+.amayadori-root #door-animation .door.right { right: 0; transform-origin: right; }
+.theme-amayadori #door-animation.open .left,
+.amayadori-root #door-animation.open .left { transform: rotateY(-110deg); }
+.theme-amayadori #door-animation.open .right,
+.amayadori-root #door-animation.open .right { transform: rotateY(110deg); }
+
+/* グラスモーフィズムの微調整（テーマ） */
+.theme-amayadori .glass-card,
+.amayadori-root .glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+/* チャット画面の背景（テーマ） */
+.theme-amayadori #chat-screen.glass-card,
+.amayadori-root #chat-screen.glass-card {
+  background: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)),
+    url('https://storage.googleapis.com/amayadori/cafebackground.png') center/cover;
+  backdrop-filter: blur(0px);
+}
+.theme-amayadori #chat-screen header,
+.theme-amayadori #chat-screen footer,
+.amayadori-root #chat-screen header,
+.amayadori-root #chat-screen footer {
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+
+/* 入力欄（テーマ） */
+.theme-amayadori .input-glass,
+.theme-amayadori .message-textarea,
+.amayadori-root .input-glass,
+.amayadori-root .message-textarea {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 0.75rem; transition: all 0.3s ease; color: var(--text-primary);
+}
+.theme-amayadori .input-glass:focus,
+.amayadori-root .input-glass:focus {
+  outline: none; border-color: var(--accent-start); box-shadow: 0 0 0 2px var(--accent-start);
+}
+.theme-amayadori .input-glass::placeholder,
+.theme-amayadori .message-textarea::placeholder,
+.amayadori-root .input-glass::placeholder,
+.amayadori-root .message-textarea::placeholder { color: var(--text-secondary); }
+.theme-amayadori .message-textarea,
+.amayadori-root .message-textarea { overflow-y: hidden; max-height: 120px; }
+
+/* ボタン（テーマ） */
+.theme-amayadori .btn-gradient,
+.amayadori-root .btn-gradient {
+  background-image: linear-gradient(to right, var(--accent-start) 0%, var(--accent-end) 51%, var(--accent-start) 100%);
+  background-size: 200% auto; transition: all 0.3s ease;
+}
+.theme-amayadori .btn-gradient:hover,
+.amayadori-root .btn-gradient:hover {
+  background-position: right center; transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(107, 115, 255, 0.4);
+}
+.theme-amayadori .btn-secondary,
+.amayadori-root .btn-secondary {
+  background: var(--glass-bg); border: 1px solid var(--glass-border); transition: all 0.3s ease;
+}
+.theme-amayadori .btn-secondary:hover,
+.amayadori-root .btn-secondary:hover {
+  background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);
+}
+
+/* 退室ボタン（テーマ） */
+.theme-amayadori .btn-exit,
+.amayadori-root .btn-exit {
+  background-color: rgba(239,68,68,0.15); color: #f87171;
+  padding: 0.5rem 1rem; border-radius: 0.75rem; font-weight: 500;
+  transition: all 0.2s ease; border: 1px solid rgba(239,68,68,0.3);
+}
+.theme-amayadori .btn-exit:hover,
+.amayadori-root .btn-exit:hover {
+  background-color: rgba(239,68,68,0.3); color: #ef4444; border-color: rgba(239,68,68,0.5);
+}
+
+/* チャットバブル（テーマ） */
+.theme-amayadori .chat-bubble,
+.amayadori-root .chat-bubble {
+  max-width: 70%; padding: 0.75rem 1.25rem; margin-bottom: 0.5rem;
+  word-wrap: break-word; opacity: 0; transform: translateY(20px);
+  animation: pop-in 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+.theme-amayadori .chat-bubble p,
+.amayadori-root .chat-bubble p { white-space: pre-wrap; }
+@keyframes pop-in { to { opacity: 1; transform: translateY(0); } }
+.theme-amayadori .chat-bubble.me,
+.amayadori-root .chat-bubble.me {
+  background: linear-gradient(to right, var(--accent-start), var(--accent-end));
+  color: white; border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+}
+.theme-amayadori .chat-bubble.other,
+.amayadori-root .chat-bubble.other {
+  background: rgba(10,10,20,0.8); border: 1px solid var(--glass-border);
+  border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+}
+
+/* 話題の提案ボタン（テーマ） */
+.theme-amayadori .suggestion-btn,
+.amayadori-root .suggestion-btn {
+  padding: 0.25rem 0.75rem; font-size: 0.875rem; border-radius: 9999px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  color: var(--text-primary); transition: all 0.2s ease; cursor: pointer; flex-shrink: 0;
+}
+.theme-amayadori .suggestion-btn:hover,
+.amayadori-root .suggestion-btn:hover {
+  background: rgba(255,255,255,0.2); transform: translateY(-1px);
+}
+
+/* スクロールバー（テーマ） */
+.theme-amayadori #chat-messages::-webkit-scrollbar,
+.theme-amayadori .message-textarea::-webkit-scrollbar,
+.amayadori-root #chat-messages::-webkit-scrollbar,
+.amayadori-root .message-textarea::-webkit-scrollbar { width: 6px; }
+.theme-amayadori #chat-messages::-webkit-scrollbar-track,
+.theme-amayadori .message-textarea::-webkit-scrollbar-track,
+.amayadori-root #chat-messages::-webkit-scrollbar-track,
+.amayadori-root .message-textarea::-webkit-scrollbar-track { background: transparent; }
+.theme-amayadori #chat-messages::-webkit-scrollbar-thumb,
+.theme-amayadori .message-textarea::-webkit-scrollbar-thumb,
+.amayadori-root #chat-messages::-webkit-scrollbar-thumb,
+.amayadori-root .message-textarea::-webkit-scrollbar-thumb {
+  background-color: var(--glass-border); border-radius: 10px;
+}
+
+/* アニメーション（テーマ） */
+.theme-amayadori .fade-in,
+.amayadori-root .fade-in { animation: fadeIn 1s ease-in-out forwards; }
+.theme-amayadori .fade-out,
+.amayadori-root .fade-out { animation: fadeOut 1s ease-in-out forwards; }
+@keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes fadeOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.95); } }
+.theme-amayadori .spinner,
+.amayadori-root .spinner {
+  border-color: rgba(255,255,255,0.2);
+  border-top-color: var(--accent-start);
+  animation: spin 1s linear infinite;
+}
