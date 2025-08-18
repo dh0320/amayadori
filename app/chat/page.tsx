@@ -6,13 +6,13 @@ import {
   addDoc,
   collection,
   doc,
-  getDoc,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   Timestamp,
+  getDoc,
 } from 'firebase/firestore';
 import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth, db, ensureAnon } from '@/lib/firebase';
@@ -40,7 +40,7 @@ export default function ChatPage() {
   const sp = useSearchParams();
   const roomId = sp.get('room') || '';
 
-  // 自分の表示情報（プロフィール画面で localStorage 保存している想定）
+  const [myUid, setMyUid] = useState<string>('');
   const [meNick, setMeNick] = useState('あなた');
   const [meIcon, setMeIcon] = useState('');
   const [meProfile, setMeProfile] = useState('...');
@@ -48,6 +48,7 @@ export default function ChatPage() {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
   const [memberLabel, setMemberLabel] = useState('オーナーとあなた');
+  const [peerLeftNotice, setPeerLeftNotice] = useState(false);
 
   const [doorOpen, setDoorOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -68,10 +69,12 @@ export default function ChatPage() {
     []
   );
 
+  // 初期化
   useEffect(() => {
     (async () => {
       if (!roomId) return;
       await ensureAnon();
+      setMyUid(auth.currentUser?.uid || '');
 
       // localStorage から見た目用プロフィール
       try {
@@ -80,15 +83,21 @@ export default function ChatPage() {
         setMeIcon(localStorage.getItem('amayadori_icon') || '');
       } catch {}
 
-      // 参加者表示
-      const roomSnap = await getDoc(doc(db, 'rooms', roomId));
-      if (roomSnap.exists()) {
-        const ms: string[] = (roomSnap.data() as any).members || [];
+      // 部屋の購読（残存確認用 & 見出し更新）
+      const roomUnsub = onSnapshot(doc(db, 'rooms', roomId), (roomSnap) => {
+        if (!roomSnap.exists()) return;
+        const data = roomSnap.data() as any;
+        const ms: string[] = Array.isArray(data.members) ? data.members : [];
         if (ms.includes('ownerAI') && ms.length === 2) setMemberLabel('オーナーとあなた');
         else if (ms.length === 2) setMemberLabel('相手とあなた');
         else if (ms.length >= 3) setMemberLabel(`他${ms.length - 1}人とあなた`);
         else setMemberLabel('あなた');
-      }
+
+        // 自分ひとりになったらUI側でも通知（フォールバック）
+        if (myUid && ms.length === 1 && ms.includes(myUid)) {
+          setPeerLeftNotice(true);
+        }
+      });
 
       // メッセージ購読
       const q = query(
@@ -96,16 +105,24 @@ export default function ChatPage() {
         orderBy('createdAt', 'asc'),
         limit(200)
       );
-      const unsub = onSnapshot(q, (ss) => {
+      const msgUnsub = onSnapshot(q, (ss) => {
         const list: ChatMsg[] = ss.docs.map((d) => {
           const v = d.data() as any;
           return { id: d.id, text: v.text, uid: v.uid, system: !!v.system, createdAt: v.createdAt };
         });
         setMsgs(list);
+        // Firestoreのシステムメッセージが来たら、UI側フォールバックは下げる
+        if (list.some(m => m.system && m.text === '会話相手が退席しました')) {
+          setPeerLeftNotice(false);
+        }
       });
-      return () => unsub();
+
+      return () => {
+        roomUnsub();
+        msgUnsub();
+      };
     })();
-  }, [roomId]);
+  }, [roomId, myUid]);
 
   function autoResize() {
     const el = taRef.current;
@@ -156,6 +173,8 @@ export default function ChatPage() {
     setTimeout(() => r.push('/amayadori'), 600);
   }
 
+  const hasSystemPeerLeft = msgs.some(m => m.system && m.text === '会話相手が退席しました');
+
   return (
     <div className="w-full h-full overflow-hidden">
       {/* 雨 */}
@@ -198,8 +217,15 @@ export default function ChatPage() {
 
           {/* メッセージ */}
           <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
+            {/* Firestoreのsystemメッセージ、またはUIフォールバック */}
+            {(hasSystemPeerLeft || peerLeftNotice) && (
+              <div className="text-center text-gray-400 text-sm italic my-2">
+                会話相手が退席しました
+              </div>
+            )}
+
             {/* 最初の演出（実メッセージが無いとき） */}
-            {msgs.length === 0 && (
+            {msgs.length === 0 && !hasSystemPeerLeft && !peerLeftNotice && (
               <div className="flex items-end gap-2 justify-start">
                 <img className="w-8 h-8 rounded-full object-cover" src={OWNER_ICON} alt="" />
                 <div className="chat-bubble other">
@@ -211,6 +237,8 @@ export default function ChatPage() {
 
             {msgs.map((m) => {
               if (m.system) {
+                // 既に中央通知を出しているので、ここでは二重表示を避ける
+                if (m.text === '会話相手が退席しました') return null;
                 return (
                   <div key={m.id} className="text-center text-gray-400 text-sm italic my-2">
                     {m.text}
