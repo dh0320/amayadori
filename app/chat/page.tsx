@@ -33,7 +33,7 @@ const conversationStarters = [
   '何か面白い話、ありますか？',
 ];
 
-type ChatMsg = { id: string; text: string; uid: string; createdAt?: Timestamp };
+type ChatMsg = { id: string; text: string; uid: string; system?: boolean; createdAt?: Timestamp };
 
 export default function ChatPage() {
   const r = useRouter();
@@ -51,6 +51,7 @@ export default function ChatPage() {
 
   const [doorOpen, setDoorOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // 雨アニメ粒
@@ -98,7 +99,7 @@ export default function ChatPage() {
       const unsub = onSnapshot(q, (ss) => {
         const list: ChatMsg[] = ss.docs.map((d) => {
           const v = d.data() as any;
-          return { id: d.id, text: v.text, uid: v.uid, createdAt: v.createdAt };
+          return { id: d.id, text: v.text, uid: v.uid, system: !!v.system, createdAt: v.createdAt };
         });
         setMsgs(list);
       });
@@ -155,8 +156,6 @@ export default function ChatPage() {
     setTimeout(() => r.push('/amayadori'), 600);
   }
 
-  const myUid = auth.currentUser?.uid;
-
   return (
     <div className="w-full h-full overflow-hidden">
       {/* 雨 */}
@@ -193,7 +192,7 @@ export default function ChatPage() {
                 <h2 className="text-lg font-bold">Cafe Amayadori</h2>
                 <p className="text-sm text-gray-400">{memberLabel}</p>
               </div>
-              <button className="btn-exit" onClick={leave}>退室</button>
+              <button className="btn-exit" onClick={() => setShowLeaveConfirm(true)}>退室</button>
             </div>
           </header>
 
@@ -211,7 +210,14 @@ export default function ChatPage() {
             )}
 
             {msgs.map((m) => {
-              const isMe = myUid && m.uid === myUid;
+              if (m.system) {
+                return (
+                  <div key={m.id} className="text-center text-gray-400 text-sm italic my-2">
+                    {m.text}
+                  </div>
+                )
+              }
+              const isMe = (auth.currentUser?.uid && m.uid === auth.currentUser?.uid) || false
               return (
                 <div key={m.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
                   {!isMe && (
@@ -235,7 +241,7 @@ export default function ChatPage() {
                     />
                   )}
                 </div>
-              );
+              )
             })}
           </main>
 
@@ -299,6 +305,21 @@ export default function ChatPage() {
         <div className="door left"></div>
         <div className="door right"></div>
       </div>
+
+      {/* 退室確認モーダル */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+          <div className="glass-card p-6 w-full max-w-sm text-center space-y-4">
+            <p className="text-lg font-semibold">本当に退席しますか？</p>
+            <div className="flex gap-3 justify-center">
+              <button className="btn-secondary" onClick={() => setShowLeaveConfirm(false)}>いいえ</button>
+              <button className="btn-gradient" onClick={async () => { setShowLeaveConfirm(false); await leave(); }}>
+                はい
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
