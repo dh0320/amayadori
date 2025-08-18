@@ -1,4 +1,3 @@
-// app/amayadori/page.tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -11,6 +10,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
+import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth, db, ensureAnon } from '@/lib/firebase';
 
 const DEFAULT_USER_ICON =
@@ -120,28 +120,50 @@ export default function Page() {
   function submitProfile() {
     setUserNickname((n) => (n.trim() ? n : '名無しさん'));
     setUserProfile((p) => (p.trim() ? p : '...'));
+    try {
+      localStorage.setItem('amayadori_nickname', userNickname || 'あなた');
+      localStorage.setItem('amayadori_profile', userProfile || '...');
+      if (userIcon) localStorage.setItem('amayadori_icon', userIcon);
+    } catch {}
     toScreen('region');
   }
 
-  // ▼▼▼ 方法A：毎回 addDoc して“その1件だけ”を監視 ▼▼▼
-  async function handleJoin(queueKey: 'country' | 'global') {
+// ▼ ここから: handleJoin をこのコードで置換 ▼
+async function handleJoin(queueKey: 'country' | 'global') {
+  try {
+    // 1) 匿名ログイン担保
+    await ensureAnon();
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('auth unavailable');
+
+    // 2) 待機画面へ
+    setOwnerPrompt(false);
+    toScreen('waiting');
+
+    // 3) 既存の監視を停止（連打対策）
+    if (entryUnsubRef.current) {
+      entryUnsubRef.current();
+      entryUnsubRef.current = null;
+    }
+
+    // 4) Callable enter を呼ぶ（天候は今は log-only）
+    const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
+
+    let entryId: string | undefined;
     try {
-      // 1) 匿名ログイン担保
-      await ensureAnon();
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error('auth unavailable');
-
-      // 2) 待機画面へ
-      setOwnerPrompt(false);
-      toScreen('waiting');
-
-      // 3) 既存の監視を停止（連打対策）
-      if (entryUnsubRef.current) {
-        entryUnsubRef.current();
-        entryUnsubRef.current = null;
+      const res = (await fn({ queueKey })) as any;
+      if (res?.data?.status === 'denied') {
+        setWaitingMessage('今日は条件外でした');
+        return;
       }
+      entryId = res?.data?.entryId as string | undefined;
+    } catch (err) {
+      console.warn('[enter] callable error, will fallback to client-created entry', err);
+      // 続行してフォールバックへ
+    }
 
-      // 4) エントリ作成（常に新規：TTL 約2分）
+    // 5) フォールバック：entryId が無い場合はクライアントで matchEntries を作成（旧実装互換）
+    if (!entryId) {
       const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
       const ref = await addDoc(collection(db, 'matchEntries'), {
         uid,
@@ -149,34 +171,38 @@ export default function Page() {
         status: 'queued',      // Functions が 'matched' に更新
         createdAt: serverTimestamp(),
         expiresAt,
+        source: 'client-fallback', // デバッグ識別用
       });
-      console.log('[join] entry created:', ref.id, { uid, queueKey });
-
-      // 5) 自分の1件だけを監視 → matched で /chat へ
-      entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', ref.id), (snap) => {
-        const d = snap.data() as any | undefined;
-        if (!d) return;
-        if (d.status === 'matched' && d.roomId) {
-          console.log('[join] matched! room =', d.roomId);
-          entryUnsubRef.current?.();
-          entryUnsubRef.current = null;
-          router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
-        }
-        if (d.status === 'denied') {
-          setWaitingMessage('今日は条件外でした');
-        }
-      });
-
-      // 6) 20秒待って相手がいなければオーナー提案
-      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-      waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
-    } catch (e: any) {
-      console.error(e);
-      alert(e?.message || '入室に失敗しました');
-      toScreen('region');
+      console.log('[join:fallback] entry created by client:', ref.id, { uid, queueKey });
+      entryId = ref.id;
     }
+
+    // 6) 自分の1件だけを監視 → matched で /chat へ
+    entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
+      const d = snap.data() as any | undefined;
+      if (!d) return;
+      if (d.status === 'matched' && d.roomId) {
+        console.log('[join] matched! room =', d.roomId);
+        entryUnsubRef.current?.();
+        entryUnsubRef.current = null;
+        router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
+      }
+      if (d.status === 'denied') {
+        setWaitingMessage('今日は条件外でした');
+      }
+    });
+
+    // 7) 20秒待って相手がいなければオーナー提案
+    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+    waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
+  } catch (e: any) {
+    console.error(e);
+    alert(e?.message || '入室に失敗しました');
+    toScreen('region');
   }
-  // ▲▲▲ ここまで ▲▲▲
+}
+// ▲ ここまで ▼
+
 
   // オーナーと話す（モック）
   function startChatWithOwner() {
