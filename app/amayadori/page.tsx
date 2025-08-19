@@ -32,6 +32,8 @@ const conversationStarters = [
 type Screen = 'profile' | 'region' | 'waiting' | 'chat';
 type Msg = { id: string; text: string; isMe: boolean; nickname?: string; icon?: string };
 
+const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
+
 export default function Page() {
   const router = useRouter();
 
@@ -59,11 +61,17 @@ export default function Page() {
   const [draft, setDraft] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // オーバーレイ
+  // 既存のダミー広告
   const [showInterstitial, setShowInterstitial] = useState(false);
   const [showRewarded, setShowRewarded] = useState(false);
   const [rewardLeft, setRewardLeft] = useState(5);
   const [customAlert, setCustomAlert] = useState<string | null>(null);
+
+  // ★ 退室後の広告（別タブでも効くように localStorage を参照）
+  const [showPostLeaveAd, setShowPostLeaveAd] = useState(false);
+  const [postLeaveLeft, setPostLeaveLeft] = useState(POST_LEAVE_AD_SEC);
+  const [pendingQueueKey, setPendingQueueKey] = useState<null | 'country' | 'global'>(null);
+  const cdTimerRef = useRef<any>(null);
 
   // 雨（ドロップをメモ化）
   const drops = useMemo(
@@ -128,81 +136,155 @@ export default function Page() {
     toScreen('region');
   }
 
-// ▼ ここから: handleJoin をこのコードで置換 ▼
-async function handleJoin(queueKey: 'country' | 'global') {
-  try {
-    // 1) 匿名ログイン担保
-    await ensureAnon();
-    const uid = auth.currentUser?.uid;
-    if (!uid) throw new Error('auth unavailable');
-
-    // 2) 待機画面へ
-    setOwnerPrompt(false);
-    toScreen('waiting');
-
-    // 3) 既存の監視を停止（連打対策）
-    if (entryUnsubRef.current) {
-      entryUnsubRef.current();
-      entryUnsubRef.current = null;
-    }
-
-    // 4) Callable enter を呼ぶ（天候は今は log-only）
-    const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
-
-    let entryId: string | undefined;
+  // クールダウン残り秒
+  function remainingCooldownSec(): number {
     try {
-      const res = (await fn({ queueKey })) as any;
-      if (res?.data?.status === 'denied') {
-        setWaitingMessage('今日は条件外でした');
+      const until = Number(localStorage.getItem('amayadori_cd_until') || '0');
+      const left = Math.ceil((until - Date.now()) / 1000);
+      return left > 0 ? left : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  // 退室後広告の開始
+  function startPostLeaveAd(initialLeft?: number, autoJoinKey?: 'country' | 'global' | null) {
+    const left = typeof initialLeft === 'number' ? initialLeft : remainingCooldownSec() || POST_LEAVE_AD_SEC;
+    setPostLeaveLeft(left);
+    setShowPostLeaveAd(true);
+    setPendingQueueKey(autoJoinKey ?? null);
+    if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    cdTimerRef.current = setInterval(() => {
+      setPostLeaveLeft((v) => {
+        if (v <= 1) {
+          clearInterval(cdTimerRef.current);
+          setShowPostLeaveAd(false);
+          try { localStorage.removeItem('amayadori_cd_until'); } catch {}
+          // 自動再入室（ユーザーが押したボタンを覚えていた場合）
+          if (pendingQueueKey) {
+            const key = pendingQueueKey;
+            setPendingQueueKey(null);
+            // 自動再入室
+            handleJoin(key);
+          }
+          return 0;
+        }
+        return v - 1;
+      });
+    }, 1000);
+  }
+
+  // エントランスに来た時に、残クールダウンがあれば広告を表示
+  useEffect(() => {
+    const left = remainingCooldownSec();
+    if (left > 0) startPostLeaveAd(left, null);
+    return () => {
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    };
+  }, []);
+
+  // ▼▼▼ サーバ主導: enter を呼んで entryId を監視 ▼▼▼
+  async function handleJoin(queueKey: 'country' | 'global') {
+    try {
+      // まずはローカルの広告クールダウンを尊重
+      const left = remainingCooldownSec();
+      if (left > 0) {
+        // 自動で再入室するために選択を記憶して広告を表示
+        startPostLeaveAd(left, queueKey);
         return;
       }
-      entryId = res?.data?.entryId as string | undefined;
-    } catch (err) {
-      console.warn('[enter] callable error, will fallback to client-created entry', err);
-      // 続行してフォールバックへ
-    }
 
-    // 5) フォールバック：entryId が無い場合はクライアントで matchEntries を作成（旧実装互換）
-    if (!entryId) {
-      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
-      const ref = await addDoc(collection(db, 'matchEntries'), {
-        uid,
-        queueKey,              // 'country' | 'global'
-        status: 'queued',      // Functions が 'matched' に更新
-        createdAt: serverTimestamp(),
-        expiresAt,
-        source: 'client-fallback', // デバッグ識別用
-      });
-      console.log('[join:fallback] entry created by client:', ref.id, { uid, queueKey });
-      entryId = ref.id;
-    }
+      // 1) 匿名ログイン担保
+      await ensureAnon();
+      const uid = auth.currentUser?.uid;
+      if (!uid) throw new Error('auth unavailable');
 
-    // 6) 自分の1件だけを監視 → matched で /chat へ
-    entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
-      const d = snap.data() as any | undefined;
-      if (!d) return;
-      if (d.status === 'matched' && d.roomId) {
-        console.log('[join] matched! room =', d.roomId);
-        entryUnsubRef.current?.();
+      // 2) 待機画面へ
+      setOwnerPrompt(false);
+      toScreen('waiting');
+
+      // 3) 既存の監視を停止（連打対策）
+      if (entryUnsubRef.current) {
+        entryUnsubRef.current();
         entryUnsubRef.current = null;
-        router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
       }
-      if (d.status === 'denied') {
-        setWaitingMessage('今日は条件外でした');
-      }
-    });
 
-    // 7) 20秒待って相手がいなければオーナー提案
-    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-    waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
-  } catch (e: any) {
-    console.error(e);
-    alert(e?.message || '入室に失敗しました');
-    toScreen('region');
+      // 4) Callable enter を呼ぶ（天候は今は log-only）
+      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
+
+      let entryId: string | undefined;
+      try {
+        const res = (await fn({ queueKey })) as any;
+        const status = res?.data?.status as string | undefined;
+        if (status === 'denied') {
+          setWaitingMessage('今日は条件外でした');
+          // 2秒後に戻す
+          setTimeout(() => toScreen('region'), 2000);
+          return;
+        }
+        if (status === 'cooldown') {
+          const leftServer = Number(res?.data?.retryAfterSec ?? 30);
+          // サーバ側のクールダウンも広告に吸収
+          try {
+            const until = Date.now() + leftServer * 1000;
+            localStorage.setItem('amayadori_cd_until', String(until));
+          } catch {}
+          startPostLeaveAd(leftServer, queueKey);
+          return;
+        }
+        entryId = res?.data?.entryId as string | undefined;
+      } catch (err) {
+        console.warn('[enter] callable error, will fallback to client-created entry', err);
+        // 続行してフォールバックへ
+      }
+
+      // 5) フォールバック：entryId が無い場合はクライアントで matchEntries を作成（旧実装互換）
+      if (!entryId) {
+        const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
+        const ref = await addDoc(collection(db, 'matchEntries'), {
+          uid,
+          queueKey,              // 'country' | 'global'
+          status: 'queued',      // Functions が 'matched' に更新
+          createdAt: serverTimestamp(),
+          expiresAt,
+          source: 'client-fallback', // デバッグ識別用
+        });
+        console.log('[join:fallback] entry created by client:', ref.id, { uid, queueKey });
+        entryId = ref.id;
+      }
+
+      // 6) 自分の1件だけを監視 → matched で /chat へ
+      entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
+        const d = snap.data() as any | undefined;
+        if (!d) return;
+        if (d.status === 'matched' && d.roomId) {
+          console.log('[join] matched! room =', d.roomId);
+          entryUnsubRef.current?.();
+          entryUnsubRef.current = null;
+          router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
+        }
+        // 理由に応じて待機メッセージを更新
+        if (d.info === 'paired_today') {
+          setWaitingMessage('今日は同じ相手とは再マッチしません。別の相手を探しています…');
+        } else if (d.info === 'waiting') {
+          setWaitingMessage('マッチング相手を探しています…');
+        }
+        if (d.status === 'denied') {
+          setWaitingMessage('今日は条件外でした');
+          setTimeout(() => toScreen('region'), 2000);
+        }
+      });
+
+      // 7) 20秒待って相手がいなければオーナー提案
+      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || '入室に失敗しました');
+      toScreen('region');
+    }
   }
-}
-// ▲ ここまで ▼
-
+  // ▲▲▲ ここまで ▲▲▲
 
   // オーナーと話す（モック）
   function startChatWithOwner() {
@@ -245,10 +327,8 @@ async function handleJoin(queueKey: 'country' | 'global') {
     }, 20000);
   }
 
-  // インタースティシャル広告（ダミー）
-  function showInterstitialAd() {
-    setShowInterstitial(true);
-  }
+  // 既存のインタースティシャル（ダミー）
+  function showInterstitialAd() { setShowInterstitial(true); }
   function closeInterstitial() {
     setShowInterstitial(false);
     setMsgs([]);
@@ -308,6 +388,7 @@ async function handleJoin(queueKey: 'country' | 'global') {
     return () => {
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       if (entryUnsubRef.current) entryUnsubRef.current();
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
     };
   }, []);
 
@@ -387,7 +468,7 @@ async function handleJoin(queueKey: 'country' | 'global') {
                   同じ国の人と
                 </button>
                 <button
-                  className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary"
+                  className="w-full text白 font-bold py-3 px-4 rounded-xl btn-secondary"
                   onClick={() => handleJoin('global')}
                 >
                   世界中の誰かと
@@ -397,7 +478,7 @@ async function handleJoin(queueKey: 'country' | 'global') {
                 <div
                   className="p-3 rounded-xl border border-dashed border-yellow-500/50 text-left cursor-pointer hover:bg-yellow-500/10 transition-colors"
                   onClick={() =>
-                    setCustomAlert('【PR】特別な夜のカフェへのご招待です。詳細はWebサイトをご覧ください。')
+                    setCustomAlert('【PR】特別な夜のカフェへご招待です。詳細はWebサイトをご覧ください。')
                   }
                 >
                   <p className="text-xs text-yellow-500 font-bold">【PR】</p>
@@ -471,7 +552,7 @@ async function handleJoin(queueKey: 'country' | 'global') {
                     {userCount}
                   </p>
                 </div>
-                <button id="end-chat-button" className="btn-exit" onClick={showInterstitialAd}>
+                <button id="end-chat-button" className="btn-exit" onClick={() => setShowInterstitial(true)}>
                   退室
                 </button>
               </div>
@@ -571,16 +652,7 @@ async function handleJoin(queueKey: 'country' | 'global') {
         )}
       </div>
 
-      {/* 扉アニメーション */}
-      <div
-        id="door-animation"
-        className={`fixed inset-0 z-50 flex pointer-events-none ${doorOpen ? 'open' : ''} ${doorOpen ? '' : 'hidden'}`}
-      >
-        <div className="door left"></div>
-        <div className="door right"></div>
-      </div>
-
-      {/* 広告用オーバーレイ（ダミー） */}
+      {/* 既存のダミー・インタースティシャル */}
       {showInterstitial && (
         <div id="interstitial-ad-screen" className="fixed inset-0 bg-black/80 z-50 flex-col items-center justify-center flex">
           <div className="bg-gray-800 p-4 rounded-lg text-center">
@@ -619,6 +691,19 @@ async function handleJoin(queueKey: 'country' | 'global') {
             >
               閉じる
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ★ 退室後広告（別タブ再入室対策） */}
+      {showPostLeaveAd && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
+          <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
+            <p className="text-sm text-gray-400">広告</p>
+            <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
+              <p className="px-6">ここにインタースティシャル広告（SDK/タグ）を差し込み</p>
+            </div>
+            <p className="text-gray-300">閉じるまで {postLeaveLeft} 秒</p>
           </div>
         </div>
       )}
