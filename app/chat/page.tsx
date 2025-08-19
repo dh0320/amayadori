@@ -35,6 +35,8 @@ const conversationStarters = [
 
 type ChatMsg = { id: string; text: string; uid: string; system?: boolean; createdAt?: Timestamp };
 
+const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
+
 export default function ChatPage() {
   const r = useRouter();
   const sp = useSearchParams();
@@ -53,6 +55,12 @@ export default function ChatPage() {
   const [doorOpen, setDoorOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+
+  // ★ 退室後広告
+  const [showPostLeaveAd, setShowPostLeaveAd] = useState(false);
+  const [postLeaveLeft, setPostLeaveLeft] = useState<number>(POST_LEAVE_AD_SEC);
+  const adTimerRef = useRef<any>(null);
+
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // 雨アニメ粒
@@ -120,6 +128,7 @@ export default function ChatPage() {
       return () => {
         roomUnsub();
         msgUnsub();
+        if (adTimerRef.current) clearInterval(adTimerRef.current);
       };
     })();
   }, [roomId, myUid]);
@@ -161,6 +170,29 @@ export default function ChatPage() {
     setTimeout(() => taRef.current?.focus(), 0);
   }
 
+  function startPostLeaveAd() {
+    // クールダウン終了時刻をローカルにも書いて、別タブ再入室も抑止
+    try {
+      const until = Date.now() + POST_LEAVE_AD_SEC * 1000;
+      localStorage.setItem('amayadori_cd_until', String(until));
+    } catch {}
+    setPostLeaveLeft(POST_LEAVE_AD_SEC);
+    setShowPostLeaveAd(true);
+    if (adTimerRef.current) clearInterval(adTimerRef.current);
+    adTimerRef.current = setInterval(() => {
+      setPostLeaveLeft((v) => {
+        if (v <= 1) {
+          clearInterval(adTimerRef.current);
+          setShowPostLeaveAd(false);
+          // エントランスへ戻る
+          r.push('/amayadori');
+          return 0;
+        }
+        return v - 1;
+      });
+    }, 1000);
+  }
+
   async function leave() {
     try {
       await ensureAnon();
@@ -168,9 +200,12 @@ export default function ChatPage() {
     } catch (e) {
       console.error(e);
     }
+    // 退室アニメ（任意）
     setDoorOpen(true);
-    setTimeout(() => setDoorOpen(false), 1300);
-    setTimeout(() => r.push('/amayadori'), 600);
+    setTimeout(() => setDoorOpen(false), 800);
+
+    // ★ 退室直後に“強制インタースティシャル”開始（閉じられない）
+    startPostLeaveAd();
   }
 
   const hasSystemPeerLeft = msgs.some(m => m.system && m.text === '会話相手が退席しました');
@@ -237,7 +272,6 @@ export default function ChatPage() {
 
             {msgs.map((m) => {
               if (m.system) {
-                // 既に中央通知を出しているので、ここでは二重表示を避ける
                 if (m.text === '会話相手が退席しました') return null;
                 return (
                   <div key={m.id} className="text-center text-gray-400 text-sm italic my-2">
@@ -276,7 +310,7 @@ export default function ChatPage() {
           {/* フッター */}
           <footer className="p-4 flex-shrink-0">
             {showSuggestions && (
-              <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
+              <div id="suggestion-area" className="flex-wrap justify中心 gap-2 mb-3 flex">
                 {threeSuggestions().map((t) => (
                   <button
                     key={t}
@@ -345,6 +379,19 @@ export default function ChatPage() {
                 はい
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ★ 退室後 強制インタースティシャル（大きめ） */}
+      {showPostLeaveAd && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
+          <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
+            <p className="text-sm text-gray-400">広告</p>
+            <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
+              <p className="px-6">ここにインタースティシャル広告（SDK/タグ）を差し込み</p>
+            </div>
+            <p className="text-gray-300">閉じるまで {postLeaveLeft} 秒</p>
           </div>
         </div>
       )}
