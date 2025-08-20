@@ -41,7 +41,7 @@ export default function Page() {
   const [screen, setScreen] = useState<Screen>('profile');
   const [doorOpen, setDoorOpen] = useState(false);
 
-  // プロフィール（① 初期表示時に localStorage から復元）
+  // プロフィール（初期復元：トップで入力した内容を常に表示）
   const [userNickname, setUserNickname] = useState('あなた');
   const [userIcon, setUserIcon] = useState<string>('');
   const [userProfile, setUserProfile] = useState('...');
@@ -62,7 +62,7 @@ export default function Page() {
   const [ownerPrompt, setOwnerPrompt] = useState(false);
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // エントリー監視/管理（②）
+  // エントリー監視/管理（ハートビート＆キャンセル）
   const entryUnsubRef = useRef<(() => void) | null>(null);
   const entryIdRef = useRef<string | null>(null);
   const heartbeatTimerRef = useRef<any>(null);
@@ -86,7 +86,11 @@ export default function Page() {
   const [pendingQueueKey, setPendingQueueKey] = useState<null | 'country' | 'global'>(null);
   const cdTimerRef = useRef<any>(null);
 
-  // 雨（ドロップをメモ化）
+  // 「今、待機中か？」の参照（ページ離脱検知で使用）
+  const isWaitingRef = useRef(false);
+  useEffect(() => { isWaitingRef.current = (screen === 'waiting'); }, [screen]);
+
+  // 雨（ドロップ）
   const drops = useMemo(
     () =>
       Array.from({ length: 100 }).map((_, i) => {
@@ -100,7 +104,7 @@ export default function Page() {
     []
   );
 
-  // テキストエリア高さ調整
+  // 入力欄のオートリサイズ
   const taRef = useRef<HTMLTextAreaElement>(null);
   function autoResize() {
     const el = taRef.current;
@@ -119,11 +123,6 @@ export default function Page() {
   function playDoor() {
     setDoorOpen(true);
     setTimeout(() => setDoorOpen(false), 1300);
-  }
-
-  // 画面切替
-  function toScreen(next: Screen) {
-    setScreen(next);
   }
 
   // 画像プレビュー
@@ -148,7 +147,7 @@ export default function Page() {
       localStorage.setItem('amayadori_profile', pf);
       if (userIcon) localStorage.setItem('amayadori_icon', userIcon);
     } catch {}
-    toScreen('region');
+    setScreen('region');
   }
 
   // クールダウン残り秒
@@ -187,6 +186,45 @@ export default function Page() {
     }, 1000);
   }
 
+  // 待機のキャンセル
+  async function cancelCurrentEntry() {
+    try {
+      const id = entryIdRef.current;
+      if (!id) return;
+      await ensureAnon();
+      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'cancelEntry');
+      await fn({ entryId: id });
+    } catch {}
+    finally {
+      entryIdRef.current = null;
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+    }
+  }
+
+  // ページ離脱/非表示の検知 → 5秒以上非表示ならキャンセル
+  useEffect(() => {
+    let hideTimer: any = null;
+
+    const onVisibility = () => {
+      if (document.hidden && isWaitingRef.current) {
+        hideTimer = setTimeout(() => { cancelCurrentEntry(); }, 5000);
+      } else if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    };
+    const onPageHide = () => { if (isWaitingRef.current) cancelCurrentEntry(); };
+
+    window.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      if (hideTimer) clearTimeout(hideTimer);
+    };
+  }, []);
+
   // エントランス到達時、残CDがあれば広告表示
   useEffect(() => {
     const left = remainingCooldownSec();
@@ -210,7 +248,7 @@ export default function Page() {
       if (!uid) throw new Error('auth unavailable');
 
       setOwnerPrompt(false);
-      toScreen('waiting');
+      setScreen('waiting');
 
       // 監視/タイマー停止
       if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
@@ -230,7 +268,7 @@ export default function Page() {
         const status = res?.data?.status as string | undefined;
         if (status === 'denied') {
           setWaitingMessage('今日は条件外でした');
-          setTimeout(() => toScreen('region'), 2000);
+          setTimeout(() => setScreen('region'), 2000);
           return;
         }
         if (status === 'cooldown') {
@@ -285,58 +323,47 @@ export default function Page() {
         else if (d.info === 'waiting') setWaitingMessage('マッチング相手を探しています…');
         if (d.status === 'denied') {
           setWaitingMessage('今日は条件外でした');
-          setTimeout(() => toScreen('region'), 2000);
+          setTimeout(() => setScreen('region'), 2000);
         }
         if (d.status === 'stale' || d.status === 'canceled' || d.status === 'expired') {
           setWaitingMessage('待機が中断されました。もう一度お試しください。');
-          setTimeout(() => toScreen('region'), 1500);
+          setTimeout(() => setScreen('region'), 1500);
         }
       });
 
-      // 20秒待って相手がいなければオーナー提案
+      // 20秒でオーナー提案
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
     } catch (e: any) {
       console.error(e);
       alert(e?.message || '入室に失敗しました');
-      toScreen('region');
-    }
-  }
-  // ▲ ここまで ▲
-
-  // 待機を抜ける/アンマウント時のキャンセル（②）
-  async function cancelCurrentEntry() {
-    try {
-      const id = entryIdRef.current;
-      if (!id) return;
-      await ensureAnon();
-      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'cancelEntry');
-      await fn({ entryId: id });
-    } catch {}
-    finally {
-      entryIdRef.current = null;
-      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
-      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      setScreen('region');
     }
   }
 
-  // 画面破棄時のクリーンアップ
-  useEffect(() => {
-    return () => {
-      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-      // 待機中断ならキャンセル
-      cancelCurrentEntry();
-      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
-    };
-  }, []);
-
-  // 扉アニメーション
-  function playDoor() {
-    setDoorOpen(true);
-    setTimeout(() => setDoorOpen(false), 1300);
+  // 待機 → オーナー（モック）に切り替えるときは必ずキャンセル
+  async function startChatWithOwner() {
+    await cancelCurrentEntry();            // ★ 確実にキャンセル
+    setOwnerPrompt(false);
+    playDoor();
+    setRoomName('Cafe Amayadori');
+    setUserCount('オーナーとあなた');
+    setTimeout(() => {
+      setScreen('chat');
+      setTimeout(() => {
+        addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
+        setTimeout(() => setShowSuggestions(true), 500);
+      }, 500);
+    }, 600);
   }
 
-  // リワード広告（ダミー）
+  // 待機をやめる（ボタン）
+  async function abortWaiting() {
+    await cancelCurrentEntry();
+    setScreen('region');
+  }
+
+  // ダミー広告（リワード）
   function showRewardedAd() {
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
     setOwnerPrompt(false);
@@ -368,7 +395,7 @@ export default function Page() {
     setMsgs([]);
     setShowSuggestions(false);
     setDoorOpen(false);
-    toScreen('profile');
+    setScreen('profile');
   }
 
   // チャット送信（モック）
@@ -417,6 +444,15 @@ export default function Page() {
     return s.slice(0, 3);
   }
 
+  // 画面破棄時のクリーンアップ（念のため）
+  useEffect(() => {
+    return () => {
+      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      cancelCurrentEntry();
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    };
+  }, []);
+
   return (
     <div className="w-full h-full overflow-hidden">
       {/* 雨アニメーション */}
@@ -438,7 +474,7 @@ export default function Page() {
 
       {/* メイン */}
       <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
-        {/* プロフィール（① ここに常に復元した内容が出ます） */}
+        {/* プロフィール */}
         {screen === 'profile' && (
           <div id="profile-screen" className="w-full max-w-sm">
             <div className="glass-card p-8 text-center space-y-6 fade-in">
@@ -486,25 +522,17 @@ export default function Page() {
               <h2 className="text-2xl font-bold">どちらのカフェへ？</h2>
               <p className="text-sm text-gray-400">雨宿りの場所を選んでください。</p>
               <div className="space-y-4">
-                <button
-                  className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient"
-                  onClick={() => handleJoin('country')}
-                >
+                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient" onClick={() => handleJoin('country')}>
                   同じ国の人と
                 </button>
-                <button
-                  className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary"
-                  onClick={() => handleJoin('global')}
-                >
+                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
                   世界中の誰かと
                 </button>
 
                 {/* ネイティブ広告（ダミー） */}
                 <div
                   className="p-3 rounded-xl border border-dashed border-yellow-500/50 text-left cursor-pointer hover:bg-yellow-500/10 transition-colors"
-                  onClick={() =>
-                    setCustomAlert('【PR】特別な夜のカフェへご招待です。詳細はWebサイトをご覧ください。')
-                  }
+                  onClick={() => setCustomAlert('【PR】特別な夜のカフェへのご招待です。詳細はWebサイトをご覧ください。')}
                 >
                   <p className="text-xs text-yellow-500 font-bold">【PR】</p>
                   <p className="font-semibold text-white">星降る夜のカフェへご招待</p>
@@ -522,10 +550,13 @@ export default function Page() {
               <div className="flex justify-center items-center">
                 <div className="spinner w-12 h-12 rounded-full border-4"></div>
               </div>
-              <h2 id="waiting-message" className="text-2xl font-bold">
-                {waitingMessage}
-              </h2>
+              <h2 id="waiting-message" className="text-2xl font-bold">{waitingMessage}</h2>
               <p className="text-sm text-gray-400">雨の中、誰かが来るのを待っています。</p>
+
+              {/* 待機をやめる */}
+              <button className="mt-2 text-sm text-gray-300 underline" onClick={abortWaiting}>
+                待機をやめて戻る
+              </button>
 
               {ownerPrompt && (
                 <div id="owner-prompt-modal" className="fade-in pt-4 mt-4 border-t border-gray-700/50">
@@ -535,8 +566,8 @@ export default function Page() {
                     カフェのオーナーと話をしますか？
                   </p>
                   <div className="flex flex-col sm:flex-row justify-center gap-4">
-                    <button onClick={() => { setOwnerPrompt(false); setShowSuggestions(true); }} className="text-white font-bold py-2 px-6 rounded-lg btn-gradient">
-                      話す（モック）
+                    <button onClick={startChatWithOwner} className="text-white font-bold py-2 px-6 rounded-lg btn-gradient">
+                      話す
                     </button>
                     <button onClick={showRewardedAd} className="text-white font-bold py-2 px-6 rounded-lg btn-secondary">
                       広告を見て待つ
@@ -553,31 +584,18 @@ export default function Page() {
           <div id="chat-screen" className="w-full h-full flex flex-col glass-card">
             <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center space-x-3">
-                <img
-                  id="header-icon"
-                  className="w-10 h-10 rounded-full object-cover"
-                  src={userIcon || DEFAULT_USER_ICON}
-                  alt="user icon"
-                />
+                <img id="header-icon" className="w-10 h-10 rounded-full object-cover" src={userIcon || DEFAULT_USER_ICON} alt="user icon" />
                 <div>
-                  <p id="header-name" className="font-bold">
-                    {userNickname}
-                  </p>
-                  <p id="header-profile" className="text-xs text-gray-400">
-                    {userProfile}
-                  </p>
+                  <p id="header-name" className="font-bold">{userNickname}</p>
+                  <p id="header-profile" className="text-xs text-gray-400">{userProfile}</p>
                 </div>
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-right">
-                  <h2 id="room-name" className="text-lg font-bold">
-                    {roomName}
-                  </h2>
-                  <p id="user-count" className="text-sm text-gray-400">
-                    {userCount}
-                  </p>
+                  <h2 id="room-name" className="text-lg font-bold">{roomName}</h2>
+                  <p id="user-count" className="text-sm text-gray-400">{userCount}</p>
                 </div>
-                <button id="end-chat-button" className="btn-exit" onClick={() => setShowInterstitial(true)}>
+                <button id="end-chat-button" className="btn-exit" onClick={showInterstitialAd}>
                   退室
                 </button>
               </div>
@@ -591,9 +609,7 @@ export default function Page() {
                       className="w-8 h-8 rounded-full object-cover flex-shrink-0"
                       src={m.icon || OWNER_ICON}
                       alt=""
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON;
-                      }}
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON; }}
                     />
                   )}
                   <div className={`chat-bubble ${m.isMe ? 'me' : 'other'}`}>
@@ -605,9 +621,7 @@ export default function Page() {
                       className="w-8 h-8 rounded-full object-cover flex-shrink-0"
                       src={userIcon || DEFAULT_USER_ICON}
                       alt=""
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON;
-                      }}
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON; }}
                     />
                   )}
                 </div>
@@ -617,7 +631,7 @@ export default function Page() {
             <footer className="p-4 flex-shrink-0">
               {showSuggestions && (
                 <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
-                  {conversationStarters.slice(0, 3).map((t: string) => (
+                  {threeSuggestions().map((t: string) => (
                     <button
                       key={t}
                       className="suggestion-btn"
@@ -656,17 +670,8 @@ export default function Page() {
                   className="w-12 h-12 rounded-full text-white flex items-center justify-center btn-gradient flex-shrink-0"
                   onClick={send}
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
                     <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                   </svg>
@@ -675,6 +680,15 @@ export default function Page() {
             </footer>
           </div>
         )}
+      </div>
+
+      {/* 扉アニメーション */}
+      <div
+        id="door-animation"
+        className={`fixed inset-0 z-50 flex pointer-events-none ${doorOpen ? 'open' : ''} ${doorOpen ? '' : 'hidden'}`}
+      >
+        <div className="door left"></div>
+        <div className="door right"></div>
       </div>
 
       {/* 既存のダミー・インタースティシャル */}
@@ -697,14 +711,12 @@ export default function Page() {
           <div className="glass-card p-8 text-center space-y-4">
             <div className="spinner w-12 h-12 rounded-full border-4 mx-auto"></div>
             <h2 className="text-xl font-bold">リワード広告を視聴中...</h2>
-            <p id="reward-timer" className="text-lg">
-              {rewardLeft}
-            </p>
+            <p id="reward-timer" className="text-lg">{rewardLeft}</p>
           </div>
         </div>
       )}
 
-      {/* カスタムアラート */}
+      {/* カスタムアラート（PR） */}
       {customAlert && (
         <div id="custom-alert" className="fixed inset-0 bg-black/80 z-50 items-center justify-center flex">
           <div className="glass-card p-8 text-center space-y-4 max-w-sm mx-4">
