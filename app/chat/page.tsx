@@ -22,18 +22,8 @@ const DEFAULT_USER_ICON =
 const OWNER_ICON =
   'https://storage.googleapis.com/amayadori/cafeownerIcon.png';
 
-const conversationStarters = [
-  'おすすめのコーヒーは？',
-  'このお店、落ち着きますね',
-  '最近、何か良いことありましたか？',
-  'どんな音楽を聴くんですか？',
-  '雨、いつまで続くんでしょうね',
-  'この辺りは静かで良いですね',
-  '仕事の悩みを聞いてくれますか？',
-  '何か面白い話、ありますか？',
-];
-
 type ChatMsg = { id: string; text: string; uid: string; system?: boolean; createdAt?: Timestamp };
+type ProfileSnap = { nickname?: string; profile?: string; icon?: string }
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
 
@@ -43,20 +33,20 @@ export default function ChatPage() {
   const roomId = sp.get('room') || '';
 
   const [myUid, setMyUid] = useState<string>('');
-  const [meNick, setMeNick] = useState('あなた');
-  const [meIcon, setMeIcon] = useState('');
-  const [meProfile, setMeProfile] = useState('...');
+  const [profiles, setProfiles] = useState<Record<string, ProfileSnap>>({});
+  const [members, setMembers] = useState<string[]>([]);
 
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
-  const [memberLabel, setMemberLabel] = useState('オーナーとあなた');
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
   const [peerLeftNotice, setPeerLeftNotice] = useState(false);
 
   const [doorOpen, setDoorOpen] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(true);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
-  // ★ 退室後広告
+  // 退室後広告
   const [showPostLeaveAd, setShowPostLeaveAd] = useState(false);
   const [postLeaveLeft, setPostLeaveLeft] = useState<number>(POST_LEAVE_AD_SEC);
   const adTimerRef = useRef<any>(null);
@@ -77,34 +67,30 @@ export default function ChatPage() {
     []
   );
 
-  // 初期化
+  const partnerUid = useMemo(
+    () => members.find((m) => m !== myUid && m !== 'ownerAI') || (members.includes('ownerAI') ? 'ownerAI' : ''),
+    [members, myUid]
+  );
+
+  const me = profiles[myUid] || {}
+  const you = profiles[partnerUid || ''] || (partnerUid === 'ownerAI' ? { nickname: 'オーナー', profile: '雨宿りカフェのオーナー', icon: OWNER_ICON } : {})
+
   useEffect(() => {
     (async () => {
       if (!roomId) return;
       await ensureAnon();
       setMyUid(auth.currentUser?.uid || '');
 
-      // localStorage から見た目用プロフィール
-      try {
-        setMeNick(localStorage.getItem('amayadori_nickname') || 'あなた');
-        setMeProfile(localStorage.getItem('amayadori_profile') || '...');
-        setMeIcon(localStorage.getItem('amayadori_icon') || '');
-      } catch {}
-
-      // 部屋の購読（残存確認用 & 見出し更新）
+      // 部屋購読：members/profiles を取得
       const roomUnsub = onSnapshot(doc(db, 'rooms', roomId), (roomSnap) => {
         if (!roomSnap.exists()) return;
         const data = roomSnap.data() as any;
-        const ms: string[] = Array.isArray(data.members) ? data.members : [];
-        if (ms.includes('ownerAI') && ms.length === 2) setMemberLabel('オーナーとあなた');
-        else if (ms.length === 2) setMemberLabel('相手とあなた');
-        else if (ms.length >= 3) setMemberLabel(`他${ms.length - 1}人とあなた`);
-        else setMemberLabel('あなた');
+        setMembers(Array.isArray(data.members) ? data.members : []);
+        setProfiles((data.profiles || {}) as Record<string, ProfileSnap>);
 
-        // 自分ひとりになったらUI側でも通知（フォールバック）
-        if (myUid && ms.length === 1 && ms.includes(myUid)) {
-          setPeerLeftNotice(true);
-        }
+        // 自分ひとりになったらUI通知
+        const ms: string[] = Array.isArray(data.members) ? data.members : [];
+        if (myUid && ms.length === 1 && ms.includes(myUid)) setPeerLeftNotice(true);
       });
 
       // メッセージ購読
@@ -119,7 +105,6 @@ export default function ChatPage() {
           return { id: d.id, text: v.text, uid: v.uid, system: !!v.system, createdAt: v.createdAt };
         });
         setMsgs(list);
-        // Firestoreのシステムメッセージが来たら、UI側フォールバックは下げる
         if (list.some(m => m.system && m.text === '会話相手が退席しました')) {
           setPeerLeftNotice(false);
         }
@@ -133,6 +118,25 @@ export default function ChatPage() {
     })();
   }, [roomId, myUid]);
 
+  // 話題候補の取得（最初だけ）
+  useEffect(() => {
+    if (!roomId || !myUid || suggestions.length > 0) return;
+    const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'genStarters');
+    fn({ roomId })
+      .then((res: any) => {
+        const s: string[] = Array.isArray(res?.data?.starters) ? res.data.starters : [];
+        if (s.length) setSuggestions(s.slice(0, 3));
+      })
+      .catch(() => {
+        // 失敗時は軽いデフォルト
+        setSuggestions([
+          'この街で雨の日に行きたい場所は？',
+          '最近ハマってる飲み物はありますか？',
+          '静かな雨音って落ち着きますね。'
+        ]);
+      });
+  }, [roomId, myUid, suggestions.length]);
+
   function autoResize() {
     const el = taRef.current;
     if (!el) return;
@@ -144,15 +148,6 @@ export default function ChatPage() {
       el.style.overflowY = 'hidden';
       el.style.height = `${el.scrollHeight}px`;
     }
-  }
-
-  function threeSuggestions() {
-    const s = [...conversationStarters];
-    for (let i = s.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [s[i], s[j]] = [s[j], s[i]];
-    }
-    return s.slice(0, 3);
   }
 
   async function send() {
@@ -171,7 +166,6 @@ export default function ChatPage() {
   }
 
   function startPostLeaveAd() {
-    // クールダウン終了時刻をローカルにも書いて、別タブ再入室も抑止
     try {
       const until = Date.now() + POST_LEAVE_AD_SEC * 1000;
       localStorage.setItem('amayadori_cd_until', String(until));
@@ -184,7 +178,6 @@ export default function ChatPage() {
         if (v <= 1) {
           clearInterval(adTimerRef.current);
           setShowPostLeaveAd(false);
-          // エントランスへ戻る
           r.push('/amayadori');
           return 0;
         }
@@ -200,15 +193,13 @@ export default function ChatPage() {
     } catch (e) {
       console.error(e);
     }
-    // 退室アニメ（任意）
     setDoorOpen(true);
     setTimeout(() => setDoorOpen(false), 800);
-
-    // ★ 退室直後に“強制インタースティシャル”開始（閉じられない）
     startPostLeaveAd();
   }
 
   const hasSystemPeerLeft = msgs.some(m => m.system && m.text === '会話相手が退席しました');
+  const isOwnerRoom = members.includes('ownerAI');
 
   return (
     <div className="w-full h-full overflow-hidden">
@@ -229,38 +220,46 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* ここが重要：globals.css が参照する id 名を /amayadori と完全一致させる */}
       <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
         <div id="chat-screen" className="w-full h-full flex flex-col glass-card">
-          {/* ヘッダ */}
+          {/* ヘッダ：対人は双方のプロフィールを表示 */}
           <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
+            {/* 相手 */}
             <div className="flex items-center space-x-3">
-              <img className="w-10 h-10 rounded-full object-cover" src={meIcon || DEFAULT_USER_ICON} alt="" />
+              <img className="w-10 h-10 rounded-full object-cover" src={you.icon || (partnerUid === 'ownerAI' ? OWNER_ICON : DEFAULT_USER_ICON)} alt="" />
               <div>
-                <p className="font-bold">{meNick}</p>
-                <p className="text-xs text-gray-400">{meProfile}</p>
+                <p className="font-bold">{you.nickname || (partnerUid === 'ownerAI' ? 'オーナー' : '相手')}</p>
+                <p className="text-xs text-gray-400">{you.profile || (partnerUid === 'ownerAI' ? '雨宿りカフェのオーナー' : '...')}</p>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+
+            {/* タイトル */}
+            <div className="text-center">
+              <h2 className="text-lg font-bold">Cafe Amayadori</h2>
+              <p className="text-xs text-gray-400">{isOwnerRoom ? 'オーナーとあなた' : '相手とあなた'}</p>
+            </div>
+
+            {/* 自分 */}
+            <div className="flex items-center space-x-3">
               <div className="text-right">
-                <h2 className="text-lg font-bold">Cafe Amayadori</h2>
-                <p className="text-sm text-gray-400">{memberLabel}</p>
+                <p className="font-bold">{me.nickname || 'あなた'}</p>
+                <p className="text-xs text-gray-400">{me.profile || '...'}</p>
               </div>
-              <button className="btn-exit" onClick={() => setShowLeaveConfirm(true)}>退室</button>
+              <img className="w-10 h-10 rounded-full object-cover" src={me.icon || DEFAULT_USER_ICON} alt="" />
             </div>
           </header>
 
           {/* メッセージ */}
           <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
-            {/* Firestoreのsystemメッセージ、またはUIフォールバック */}
+            {/* 退席通知（system or UIフォールバック） */}
             {(hasSystemPeerLeft || peerLeftNotice) && (
               <div className="text-center text-gray-400 text-sm italic my-2">
                 会話相手が退席しました
               </div>
             )}
 
-            {/* 最初の演出（実メッセージが無いとき） */}
-            {msgs.length === 0 && !hasSystemPeerLeft && !peerLeftNotice && (
+            {/* 最初の演出は「オーナー部屋のときだけ」表示 */}
+            {msgs.length === 0 && isOwnerRoom && !hasSystemPeerLeft && !peerLeftNotice && (
               <div className="flex items-end gap-2 justify-start">
                 <img className="w-8 h-8 rounded-full object-cover" src={OWNER_ICON} alt="" />
                 <div className="chat-bubble other">
@@ -279,25 +278,26 @@ export default function ChatPage() {
                   </div>
                 )
               }
-              const isMe = (auth.currentUser?.uid && m.uid === auth.currentUser?.uid) || false
+              const mine = (auth.currentUser?.uid && m.uid === auth.currentUser?.uid) || false;
+              const partnerIcon = (partnerUid === 'ownerAI' ? OWNER_ICON : (you.icon || DEFAULT_USER_ICON));
               return (
-                <div key={m.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
-                  {!isMe && (
+                <div key={m.id} className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+                  {!mine && (
                     <img
                       className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                      src={OWNER_ICON}
+                      src={partnerIcon}
                       alt=""
                       onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON)}
                     />
                   )}
-                  <div className={`chat-bubble ${isMe ? 'me' : 'other'}`}>
-                    {!isMe && <span className="block text-xs font-bold mb-1 text-purple-300">相手</span>}
+                  <div className={`chat-bubble ${mine ? 'me' : 'other'}`}>
+                    {!mine && <span className="block text-xs font-bold mb-1 text-purple-300">{you.nickname || (partnerUid === 'ownerAI' ? 'オーナー' : '相手')}</span>}
                     <p>{m.text}</p>
                   </div>
-                  {isMe && (
+                  {mine && (
                     <img
                       className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                      src={meIcon || DEFAULT_USER_ICON}
+                      src={me.icon || DEFAULT_USER_ICON}
                       alt=""
                       onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON)}
                     />
@@ -307,11 +307,11 @@ export default function ChatPage() {
             })}
           </main>
 
-          {/* フッター */}
+          {/* フッター（話題候補はAPIの3つ） */}
           <footer className="p-4 flex-shrink-0">
-            {showSuggestions && (
-              <div id="suggestion-area" className="flex-wrap justify中心 gap-2 mb-3 flex">
-                {threeSuggestions().map((t) => (
+            {showSuggestions && suggestions.length > 0 && (
+              <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
+                {suggestions.slice(0, 3).map((t) => (
                   <button
                     key={t}
                     className="suggestion-btn"
@@ -383,7 +383,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ★ 退室後 強制インタースティシャル（大きめ） */}
+      {/* 退室後 強制インタースティシャル */}
       {showPostLeaveAd && (
         <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
           <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
