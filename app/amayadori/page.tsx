@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   addDoc,
@@ -35,6 +35,14 @@ type Drop = { i: number; x: number; delay: number; duration: number; width: numb
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
 
+// --- Functions の HTTP エンドポイント（sendBeacon 用）を自動生成 ---
+// auth.app.options.projectId を優先。なければ環境変数から。
+function resolveCancelBeaconUrl(): string {
+  // @ts-ignore
+  const pid = auth?.app?.options?.projectId || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  return pid ? `https://asia-northeast1-${pid}.cloudfunctions.net/cancelQueuedEntriesHttp` : '';
+}
+
 export default function Page() {
   const router = useRouter();
 
@@ -67,6 +75,7 @@ export default function Page() {
   const entryUnsubRef = useRef<(() => void) | null>(null);
   const entryIdRef = useRef<string | null>(null);
   const heartbeatTimerRef = useRef<any>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // チャット（モック）
   const [roomName, setRoomName] = useState('Cafe Amayadori');
@@ -91,7 +100,7 @@ export default function Page() {
   const isWaitingRef = useRef(false);
   useEffect(() => { isWaitingRef.current = (screen === 'waiting'); }, [screen]);
 
-  // 💧 雨（ドロップ）— SSRとクライアントの差異を避けるため、マウント後に生成
+  // 💧 雨（ドロップ）— SSR/CSR差分を避けるため、マウント後に生成
   const [drops, setDrops] = useState<Drop[]>([]);
   useEffect(() => {
     const arr: Drop[] = Array.from({ length: 100 }).map((_, i) => {
@@ -187,38 +196,110 @@ export default function Page() {
     }, 1000);
   }
 
-  // 待機のキャンセル（フォールバック含む）
+  // ========= sendBeacon 用：ID トークンの保持と送信 =========
+  const idTokenRef = useRef<string | null>(null);
+  const beaconUrlRef = useRef<string>(resolveCancelBeaconUrl());
+
+  // auth のトークン更新を監視（匿名ログイン後も更新される）
+  useEffect(() => {
+    const unsub = auth.onIdTokenChanged(async (u) => {
+      if (u) {
+        try {
+          idTokenRef.current = await u.getIdToken(/* forceRefresh */ false);
+        } catch {
+          idTokenRef.current = null;
+        }
+      } else {
+        idTokenRef.current = null;
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // 明示的な取得（待機参加直後など、確実に用意しておく）
+  async function ensureIdTokenReady() {
+    await ensureAnon();
+    try {
+      idTokenRef.current = await auth.currentUser!.getIdToken(false);
+    } catch {
+      // noop
+    }
+  }
+
+  function beaconCancelQueued() {
+    try {
+      if (!isWaitingRef.current) return; // 待機中のみ
+      const token = idTokenRef.current;
+      const url = beaconUrlRef.current;
+      if (!token || !url) return;
+      const body = new URLSearchParams();
+      body.set('idToken', token);
+      // CORS のプリフライト無しで送るため x-www-form-urlencoded を使用
+      navigator.sendBeacon(url, body);
+    } catch {
+      // 失敗しても致命ではない（Callable フォールバックもある）
+    }
+  }
+  // ===============================================
+
+  // 待機のキャンセル（entryId が無くても必ずフォールバック実行）
   async function cancelCurrentEntry() {
+    if (isCancelling) return;           // 多重実行防止
+    setIsCancelling(true);
     try {
       await ensureAnon();
       const fns = getFunctions(undefined, 'asia-northeast1');
       const id = entryIdRef.current;
+
+      // 1) 可能なら個別キャンセル
       if (id) {
-        await httpsCallable(fns, 'cancelEntry')({ entryId: id });
+        try {
+          await httpsCallable(fns, 'cancelEntry')({ entryId: id });
+        } catch (e) {
+          console.warn('[cancelEntry] callable failed, fallback next', e);
+        }
       }
-      // ★ 念のため自分の queued を一括キャンセル（タブクローズ等の取りこぼし対策）
-      await httpsCallable(fns, 'cancelMyQueuedEntries')({});
-    } catch {}
-    finally {
+
+      // 2) フォールバック：自分の queued を一括キャンセル
+      try {
+        await httpsCallable(fns, 'cancelMyQueuedEntries')({});
+      } catch (e) {
+        console.warn('[cancelMyQueuedEntries] callable failed', e);
+      }
+
+      // 3) 離脱中でも確実に届けるための sendBeacon（HTTP）
+      beaconCancelQueued();
+    } catch (e) {
+      console.error('[cancelCurrentEntry] failed', e);
+    } finally {
       entryIdRef.current = null;
       if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
       if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      setIsCancelling(false);
     }
   }
 
-  // ページ離脱/非表示の検知 → 5秒以上非表示ならキャンセル
+  // ページ離脱/非表示の検知
   useEffect(() => {
     let hideTimer: any = null;
 
     const onVisibility = () => {
       if (document.hidden && isWaitingRef.current) {
+        // すぐに Beacon を飛ばす（5秒待たずに即キャンセル合図）
+        beaconCancelQueued();
         hideTimer = setTimeout(() => { cancelCurrentEntry(); }, 5000);
       } else if (hideTimer) {
         clearTimeout(hideTimer);
         hideTimer = null;
       }
     };
-    const onPageHide = () => { if (isWaitingRef.current) cancelCurrentEntry(); };
+    const onPageHide = () => {
+      if (!isWaitingRef.current) return;
+      // ページ破棄直前に確実に送る
+      beaconCancelQueued();
+      // Callable も念のため（完了しないこともあるが二重で安全）
+      void cancelCurrentEntry();
+    };
 
     window.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
@@ -248,6 +329,7 @@ export default function Page() {
       }
 
       await ensureAnon();
+      await ensureIdTokenReady(); // ← 離脱検知用 Beacon に備え、先にトークンを確保
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('auth unavailable');
 
@@ -439,19 +521,12 @@ export default function Page() {
     ]);
   }
 
-  function threeSuggestions(): string[] {
-    const s = [...conversationStarters];
-    for (let i = s.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [s[i], s[j]] = [s[j], s[i]];
-    }
-    return s.slice(0, 3);
-  }
-
   // 画面破棄時のクリーンアップ（念のため）
   useEffect(() => {
     return () => {
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      // ページ破棄時にも Beacon を先に飛ばす
+      beaconCancelQueued();
       cancelCurrentEntry();
       if (cdTimerRef.current) clearInterval(cdTimerRef.current);
     };
@@ -459,7 +534,7 @@ export default function Page() {
 
   return (
     <div className="w-full h-full overflow-hidden">
-      {/* 雨アニメーション（SSRとクライアントの差異を許容） */}
+      {/* 雨アニメーション（SSRとCSRの差異許容） */}
       <div id="rain-container" suppressHydrationWarning>
         {drops.map((d) => (
           <div
@@ -539,7 +614,7 @@ export default function Page() {
                   onClick={() => setCustomAlert('【PR】特別な夜のカフェへのご招待です。詳細はWebサイトをご覧ください。')}
                 >
                   <p className="text-xs text-yellow-500 font-bold">【PR】</p>
-                  <p className="font-semibold text白">星降る夜のカフェへご招待</p>
+                  <p className="font-semibold text-white">星降る夜のカフェへご招待</p>
                   <p className="text-sm text-gray-400">今夜だけの特別な体験を。</p>
                 </div>
               </div>
@@ -558,8 +633,12 @@ export default function Page() {
               <p className="text-sm text-gray-400">雨の中、誰かが来るのを待っています。</p>
 
               {/* 待機をやめる */}
-              <button className="mt-2 text-sm text-gray-300 underline" onClick={abortWaiting}>
-                待機をやめて戻る
+              <button
+                className="mt-2 text-sm text-gray-300 underline disabled:opacity-50"
+                onClick={abortWaiting}
+                disabled={isCancelling}
+              >
+                {isCancelling ? 'キャンセル中...' : '待機をやめて戻る'}
               </button>
 
               {ownerPrompt && (
@@ -635,7 +714,7 @@ export default function Page() {
             <footer className="p-4 flex-shrink-0">
               {showSuggestions && (
                 <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
-                  {threeSuggestions().map((t: string) => (
+                  {conversationStarters.slice(0, 3).map((t) => (
                     <button
                       key={t}
                       className="suggestion-btn"
@@ -703,7 +782,7 @@ export default function Page() {
             <div className="w-72 h-96 bg-gray-700 my-2 flex items-center justify-center">
               <p>インタースティシャル広告（ダミー）</p>
             </div>
-            <button id="close-interstitial-ad" className="mt-2 text-sm text-blue-400" onClick={closeInterstitial}>
+            <button id="close-interstitial-ad" className="mt-2 text-sm text-blue-400" onClick={() => closeInterstitial()}>
               広告を閉じる
             </button>
           </div>
@@ -711,7 +790,7 @@ export default function Page() {
       )}
 
       {showRewarded && (
-        <div id="rewarded-ad-screen" className="fixed inset-0 bg黒/80 z-50 flex-col items-center justify-center flex">
+        <div id="rewarded-ad-screen" className="fixed inset-0 bg-black/80 z-50 flex-col items-center justify-center flex">
           <div className="glass-card p-8 text-center space-y-4">
             <div className="spinner w-12 h-12 rounded-full border-4 mx-auto"></div>
             <h2 className="text-xl font-bold">リワード広告を視聴中...</h2>
