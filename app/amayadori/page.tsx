@@ -31,6 +31,7 @@ const conversationStarters = [
 
 type Screen = 'profile' | 'region' | 'waiting' | 'chat';
 type Msg = { id: string; text: string; isMe: boolean; nickname?: string; icon?: string };
+type Drop = { i: number; x: number; delay: number; duration: number; width: number; height: number };
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
 
@@ -90,19 +91,19 @@ export default function Page() {
   const isWaitingRef = useRef(false);
   useEffect(() => { isWaitingRef.current = (screen === 'waiting'); }, [screen]);
 
-  // 雨（ドロップ）
-  const drops = useMemo(
-    () =>
-      Array.from({ length: 100 }).map((_, i) => {
-        const x = Math.random() * 100;
-        const delay = Math.random() * 2;
-        const duration = 0.5 + Math.random() * 0.5;
-        const width = 1 + Math.random() * 2;
-        const height = 60 + Math.random() * 40;
-        return { i, x, delay, duration, width, height };
-      }),
-    []
-  );
+  // 💧 雨（ドロップ）— SSRとクライアントの差異を避けるため、マウント後に生成
+  const [drops, setDrops] = useState<Drop[]>([]);
+  useEffect(() => {
+    const arr: Drop[] = Array.from({ length: 100 }).map((_, i) => {
+      const x = Math.random() * 100;
+      const delay = Math.random() * 2;
+      const duration = 0.5 + Math.random() * 0.5;
+      const width = 1 + Math.random() * 2;
+      const height = 60 + Math.random() * 40;
+      return { i, x, delay, duration, width, height };
+    });
+    setDrops(arr);
+  }, []);
 
   // 入力欄のオートリサイズ
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -186,14 +187,17 @@ export default function Page() {
     }, 1000);
   }
 
-  // 待機のキャンセル
+  // 待機のキャンセル（フォールバック含む）
   async function cancelCurrentEntry() {
     try {
-      const id = entryIdRef.current;
-      if (!id) return;
       await ensureAnon();
-      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'cancelEntry');
-      await fn({ entryId: id });
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const id = entryIdRef.current;
+      if (id) {
+        await httpsCallable(fns, 'cancelEntry')({ entryId: id });
+      }
+      // ★ 念のため自分の queued を一括キャンセル（タブクローズ等の取りこぼし対策）
+      await httpsCallable(fns, 'cancelMyQueuedEntries')({});
     } catch {}
     finally {
       entryIdRef.current = null;
@@ -455,8 +459,8 @@ export default function Page() {
 
   return (
     <div className="w-full h-full overflow-hidden">
-      {/* 雨アニメーション */}
-      <div id="rain-container">
+      {/* 雨アニメーション（SSRとクライアントの差異を許容） */}
+      <div id="rain-container" suppressHydrationWarning>
         {drops.map((d) => (
           <div
             key={d.i}
@@ -535,7 +539,7 @@ export default function Page() {
                   onClick={() => setCustomAlert('【PR】特別な夜のカフェへのご招待です。詳細はWebサイトをご覧ください。')}
                 >
                   <p className="text-xs text-yellow-500 font-bold">【PR】</p>
-                  <p className="font-semibold text-white">星降る夜のカフェへご招待</p>
+                  <p className="font-semibold text白">星降る夜のカフェへご招待</p>
                   <p className="text-sm text-gray-400">今夜だけの特別な体験を。</p>
                 </div>
               </div>
@@ -707,7 +711,7 @@ export default function Page() {
       )}
 
       {showRewarded && (
-        <div id="rewarded-ad-screen" className="fixed inset-0 bg-black/80 z-50 flex-col items-center justify-center flex">
+        <div id="rewarded-ad-screen" className="fixed inset-0 bg黒/80 z-50 flex-col items-center justify-center flex">
           <div className="glass-card p-8 text-center space-y-4">
             <div className="spinner w-12 h-12 rounded-full border-4 mx-auto"></div>
             <h2 className="text-xl font-bold">リワード広告を視聴中...</h2>
