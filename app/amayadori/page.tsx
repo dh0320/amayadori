@@ -67,7 +67,7 @@ export default function Page() {
   const [rewardLeft, setRewardLeft] = useState(5);
   const [customAlert, setCustomAlert] = useState<string | null>(null);
 
-  // ★ 退室後の広告（別タブでも効くように localStorage を参照）
+  // 退室後広告（別タブ対策）
   const [showPostLeaveAd, setShowPostLeaveAd] = useState(false);
   const [postLeaveLeft, setPostLeaveLeft] = useState(POST_LEAVE_AD_SEC);
   const [pendingQueueKey, setPendingQueueKey] = useState<null | 'country' | 'global'>(null);
@@ -160,11 +160,9 @@ export default function Page() {
           clearInterval(cdTimerRef.current);
           setShowPostLeaveAd(false);
           try { localStorage.removeItem('amayadori_cd_until'); } catch {}
-          // 自動再入室（ユーザーが押したボタンを覚えていた場合）
           if (pendingQueueKey) {
             const key = pendingQueueKey;
             setPendingQueueKey(null);
-            // 自動再入室
             handleJoin(key);
           }
           return 0;
@@ -174,7 +172,7 @@ export default function Page() {
     }, 1000);
   }
 
-  // エントランスに来た時に、残クールダウンがあれば広告を表示
+  // エントランス到達時、残CDがあれば広告表示
   useEffect(() => {
     const left = remainingCooldownSec();
     if (left > 0) startPostLeaveAd(left, null);
@@ -183,48 +181,45 @@ export default function Page() {
     };
   }, []);
 
-  // ▼▼▼ サーバ主導: enter を呼んで entryId を監視 ▼▼▼
+  // ▼ サーバ主導: enter を呼んで entryId を監視（プロフィール同梱） ▼
   async function handleJoin(queueKey: 'country' | 'global') {
     try {
-      // まずはローカルの広告クールダウンを尊重
       const left = remainingCooldownSec();
       if (left > 0) {
-        // 自動で再入室するために選択を記憶して広告を表示
         startPostLeaveAd(left, queueKey);
         return;
       }
 
-      // 1) 匿名ログイン担保
       await ensureAnon();
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('auth unavailable');
 
-      // 2) 待機画面へ
       setOwnerPrompt(false);
       toScreen('waiting');
 
-      // 3) 既存の監視を停止（連打対策）
       if (entryUnsubRef.current) {
         entryUnsubRef.current();
         entryUnsubRef.current = null;
       }
 
-      // 4) Callable enter を呼ぶ（天候は今は log-only）
       const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
 
       let entryId: string | undefined;
       try {
-        const res = (await fn({ queueKey })) as any;
+        const profile = {
+          nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+          profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
+          icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
+        };
+        const res = (await fn({ queueKey, profile })) as any;
         const status = res?.data?.status as string | undefined;
         if (status === 'denied') {
           setWaitingMessage('今日は条件外でした');
-          // 2秒後に戻す
           setTimeout(() => toScreen('region'), 2000);
           return;
         }
         if (status === 'cooldown') {
           const leftServer = Number(res?.data?.retryAfterSec ?? 30);
-          // サーバ側のクールダウンも広告に吸収
           try {
             const until = Date.now() + leftServer * 1000;
             localStorage.setItem('amayadori_cd_until', String(until));
@@ -234,36 +229,35 @@ export default function Page() {
         }
         entryId = res?.data?.entryId as string | undefined;
       } catch (err) {
-        console.warn('[enter] callable error, will fallback to client-created entry', err);
-        // 続行してフォールバックへ
+        console.warn('[enter] callable error, fallback to client entry', err);
       }
 
-      // 5) フォールバック：entryId が無い場合はクライアントで matchEntries を作成（旧実装互換）
       if (!entryId) {
         const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
         const ref = await addDoc(collection(db, 'matchEntries'), {
           uid,
-          queueKey,              // 'country' | 'global'
-          status: 'queued',      // Functions が 'matched' に更新
+          queueKey,
+          status: 'queued',
           createdAt: serverTimestamp(),
           expiresAt,
-          source: 'client-fallback', // デバッグ識別用
+          source: 'client-fallback',
+          profile: {
+            nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+            profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
+            icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
+          },
         });
-        console.log('[join:fallback] entry created by client:', ref.id, { uid, queueKey });
         entryId = ref.id;
       }
 
-      // 6) 自分の1件だけを監視 → matched で /chat へ
       entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
         const d = snap.data() as any | undefined;
         if (!d) return;
         if (d.status === 'matched' && d.roomId) {
-          console.log('[join] matched! room =', d.roomId);
           entryUnsubRef.current?.();
           entryUnsubRef.current = null;
           router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
         }
-        // 理由に応じて待機メッセージを更新
         if (d.info === 'paired_today') {
           setWaitingMessage('今日は同じ相手とは再マッチしません。別の相手を探しています…');
         } else if (d.info === 'waiting') {
@@ -275,7 +269,6 @@ export default function Page() {
         }
       });
 
-      // 7) 20秒待って相手がいなければオーナー提案
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
     } catch (e: any) {
@@ -284,7 +277,7 @@ export default function Page() {
       toScreen('region');
     }
   }
-  // ▲▲▲ ここまで ▲▲▲
+  // ▲ ここまで ▲
 
   // オーナーと話す（モック）
   function startChatWithOwner() {
@@ -327,7 +320,7 @@ export default function Page() {
     }, 20000);
   }
 
-  // 既存のインタースティシャル（ダミー）
+  // 既存インタースティシャル（ダミー）
   function showInterstitialAd() { setShowInterstitial(true); }
   function closeInterstitial() {
     setShowInterstitial(false);
@@ -337,7 +330,7 @@ export default function Page() {
     toScreen('profile');
   }
 
-  // チャット送信（モックのBOT返信）
+  // チャット送信（モック）
   function send() {
     const text = draft.trim();
     if (!text) return;
@@ -468,7 +461,7 @@ export default function Page() {
                   同じ国の人と
                 </button>
                 <button
-                  className="w-full text白 font-bold py-3 px-4 rounded-xl btn-secondary"
+                  className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary"
                   onClick={() => handleJoin('global')}
                 >
                   世界中の誰かと
@@ -695,7 +688,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* ★ 退室後広告（別タブ再入室対策） */}
+      {/* 退室後広告（別タブ再入室対策） */}
       {showPostLeaveAd && (
         <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
           <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
