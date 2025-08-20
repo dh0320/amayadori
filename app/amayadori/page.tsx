@@ -41,18 +41,31 @@ export default function Page() {
   const [screen, setScreen] = useState<Screen>('profile');
   const [doorOpen, setDoorOpen] = useState(false);
 
-  // プロフィール
+  // プロフィール（① 初期表示時に localStorage から復元）
   const [userNickname, setUserNickname] = useState('あなた');
   const [userIcon, setUserIcon] = useState<string>('');
   const [userProfile, setUserProfile] = useState('...');
+
+  useEffect(() => {
+    try {
+      const nn = localStorage.getItem('amayadori_nickname');
+      const pf = localStorage.getItem('amayadori_profile');
+      const ic = localStorage.getItem('amayadori_icon');
+      if (nn) setUserNickname(nn);
+      if (pf) setUserProfile(pf);
+      if (ic) setUserIcon(ic);
+    } catch {}
+  }, []);
 
   // 待機
   const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
   const [ownerPrompt, setOwnerPrompt] = useState(false);
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 直近のエントリ監視解除用
+  // エントリー監視/管理（②）
   const entryUnsubRef = useRef<(() => void) | null>(null);
+  const entryIdRef = useRef<string | null>(null);
+  const heartbeatTimerRef = useRef<any>(null);
 
   // チャット（モック）
   const [roomName, setRoomName] = useState('Cafe Amayadori');
@@ -124,13 +137,15 @@ export default function Page() {
     reader.readAsDataURL(file);
   }
 
-  // プロフィール送信
+  // プロフィール送信（保存して region へ）
   function submitProfile() {
-    setUserNickname((n) => (n.trim() ? n : '名無しさん'));
-    setUserProfile((p) => (p.trim() ? p : '...'));
+    const nn = userNickname?.trim() ? userNickname : '名無しさん';
+    const pf = userProfile?.trim() ? userProfile : '...';
+    setUserNickname(nn);
+    setUserProfile(pf);
     try {
-      localStorage.setItem('amayadori_nickname', userNickname || 'あなた');
-      localStorage.setItem('amayadori_profile', userProfile || '...');
+      localStorage.setItem('amayadori_nickname', nn);
+      localStorage.setItem('amayadori_profile', pf);
       if (userIcon) localStorage.setItem('amayadori_icon', userIcon);
     } catch {}
     toScreen('region');
@@ -181,7 +196,7 @@ export default function Page() {
     };
   }, []);
 
-  // ▼ サーバ主導: enter を呼んで entryId を監視（プロフィール同梱） ▼
+  // ▼ 待機キュー参加：プロフィール同梱 + ハートビート & キャンセル ▼
   async function handleJoin(queueKey: 'country' | 'global') {
     try {
       const left = remainingCooldownSec();
@@ -197,20 +212,20 @@ export default function Page() {
       setOwnerPrompt(false);
       toScreen('waiting');
 
-      if (entryUnsubRef.current) {
-        entryUnsubRef.current();
-        entryUnsubRef.current = null;
-      }
+      // 監視/タイマー停止
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      entryIdRef.current = null;
 
       const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
+      const profile = {
+        nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+        profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
+        icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
+      };
 
       let entryId: string | undefined;
       try {
-        const profile = {
-          nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
-          profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
-          icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
-        };
         const res = (await fn({ queueKey, profile })) as any;
         const status = res?.data?.status as string | undefined;
         if (status === 'denied') {
@@ -220,10 +235,7 @@ export default function Page() {
         }
         if (status === 'cooldown') {
           const leftServer = Number(res?.data?.retryAfterSec ?? 30);
-          try {
-            const until = Date.now() + leftServer * 1000;
-            localStorage.setItem('amayadori_cd_until', String(until));
-          } catch {}
+          try { localStorage.setItem('amayadori_cd_until', String(Date.now() + leftServer * 1000)); } catch {}
           startPostLeaveAd(leftServer, queueKey);
           return;
         }
@@ -239,36 +251,49 @@ export default function Page() {
           queueKey,
           status: 'queued',
           createdAt: serverTimestamp(),
+          lastSeenAt: serverTimestamp(),
           expiresAt,
           source: 'client-fallback',
-          profile: {
-            nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
-            profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
-            icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
-          },
+          profile,
         });
         entryId = ref.id;
       }
 
+      // entryId を保持
+      entryIdRef.current = entryId;
+
+      // ハートビート（10秒おきに lastSeenAt 更新）
+      const touch = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'touchEntry');
+      heartbeatTimerRef.current = setInterval(() => {
+        const id = entryIdRef.current;
+        if (!id) return;
+        touch({ entryId: id }).catch(() => {});
+      }, 10_000);
+
+      // 自分の1件だけを監視 → matched で /chat へ
       entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
         const d = snap.data() as any | undefined;
         if (!d) return;
         if (d.status === 'matched' && d.roomId) {
-          entryUnsubRef.current?.();
-          entryUnsubRef.current = null;
+          // 片付けてルームへ
+          if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+          if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+          entryIdRef.current = null;
           router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
         }
-        if (d.info === 'paired_today') {
-          setWaitingMessage('今日は同じ相手とは再マッチしません。別の相手を探しています…');
-        } else if (d.info === 'waiting') {
-          setWaitingMessage('マッチング相手を探しています…');
-        }
+        if (d.info === 'paired_today') setWaitingMessage('今日は同じ相手とは再マッチしません。別の相手を探しています…');
+        else if (d.info === 'waiting') setWaitingMessage('マッチング相手を探しています…');
         if (d.status === 'denied') {
           setWaitingMessage('今日は条件外でした');
           setTimeout(() => toScreen('region'), 2000);
         }
+        if (d.status === 'stale' || d.status === 'canceled' || d.status === 'expired') {
+          setWaitingMessage('待機が中断されました。もう一度お試しください。');
+          setTimeout(() => toScreen('region'), 1500);
+        }
       });
 
+      // 20秒待って相手がいなければオーナー提案
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
     } catch (e: any) {
@@ -279,20 +304,36 @@ export default function Page() {
   }
   // ▲ ここまで ▲
 
-  // オーナーと話す（モック）
-  function startChatWithOwner() {
-    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-    setOwnerPrompt(false);
-    playDoor();
-    setRoomName('Cafe Amayadori');
-    setUserCount('オーナーとあなた');
-    setTimeout(() => {
-      toScreen('chat');
-      setTimeout(() => {
-        addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
-        setTimeout(() => setShowSuggestions(true), 500);
-      }, 500);
-    }, 600);
+  // 待機を抜ける/アンマウント時のキャンセル（②）
+  async function cancelCurrentEntry() {
+    try {
+      const id = entryIdRef.current;
+      if (!id) return;
+      await ensureAnon();
+      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'cancelEntry');
+      await fn({ entryId: id });
+    } catch {}
+    finally {
+      entryIdRef.current = null;
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+    }
+  }
+
+  // 画面破棄時のクリーンアップ
+  useEffect(() => {
+    return () => {
+      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      // 待機中断ならキャンセル
+      cancelCurrentEntry();
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    };
+  }, []);
+
+  // 扉アニメーション
+  function playDoor() {
+    setDoorOpen(true);
+    setTimeout(() => setDoorOpen(false), 1300);
   }
 
   // リワード広告（ダミー）
@@ -376,15 +417,6 @@ export default function Page() {
     return s.slice(0, 3);
   }
 
-  // クリーンアップ
-  useEffect(() => {
-    return () => {
-      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-      if (entryUnsubRef.current) entryUnsubRef.current();
-      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
-    };
-  }, []);
-
   return (
     <div className="w-full h-full overflow-hidden">
       {/* 雨アニメーション */}
@@ -406,7 +438,7 @@ export default function Page() {
 
       {/* メイン */}
       <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
-        {/* プロフィール */}
+        {/* プロフィール（① ここに常に復元した内容が出ます） */}
         {screen === 'profile' && (
           <div id="profile-screen" className="w-full max-w-sm">
             <div className="glass-card p-8 text-center space-y-6 fade-in">
@@ -503,8 +535,8 @@ export default function Page() {
                     カフェのオーナーと話をしますか？
                   </p>
                   <div className="flex flex-col sm:flex-row justify-center gap-4">
-                    <button onClick={startChatWithOwner} className="text-white font-bold py-2 px-6 rounded-lg btn-gradient">
-                      話す
+                    <button onClick={() => { setOwnerPrompt(false); setShowSuggestions(true); }} className="text-white font-bold py-2 px-6 rounded-lg btn-gradient">
+                      話す（モック）
                     </button>
                     <button onClick={showRewardedAd} className="text-white font-bold py-2 px-6 rounded-lg btn-secondary">
                       広告を見て待つ
@@ -585,7 +617,7 @@ export default function Page() {
             <footer className="p-4 flex-shrink-0">
               {showSuggestions && (
                 <div id="suggestion-area" className="flex-wrap justify-center gap-2 mb-3 flex">
-                  {threeSuggestions().map((t: string) => (
+                  {conversationStarters.slice(0, 3).map((t: string) => (
                     <button
                       key={t}
                       className="suggestion-btn"
