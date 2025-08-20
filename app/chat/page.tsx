@@ -23,6 +23,7 @@ const OWNER_ICON =
 
 type ChatMsg = { id: string; text: string; uid: string; system?: boolean; createdAt?: Timestamp };
 type ProfileSnap = { nickname?: string; profile?: string; icon?: string };
+type Drop = { i: number; x: number; delay: number; duration: number; width: number; height: number };
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
 
@@ -47,19 +48,19 @@ export default function ChatPage() {
   const adTimerRef = useRef<any>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // 雨アニメ
-  const drops = useMemo(
-    () =>
-      Array.from({ length: 100 }).map((_, i) => {
-        const x = Math.random() * 100;
-        const delay = Math.random() * 2;
-        const duration = 0.5 + Math.random() * 0.5;
-        const width = 1 + Math.random() * 2;
-        const height = 60 + Math.random() * 40;
-        return { i, x, delay, duration, width, height };
-      }),
-    []
-  );
+  // 💧 雨アニメ：マウント後に生成（SSR差分を避ける）
+  const [drops, setDrops] = useState<Drop[]>([]);
+  useEffect(() => {
+    const arr: Drop[] = Array.from({ length: 100 }).map((_, i) => {
+      const x = Math.random() * 100;
+      const delay = Math.random() * 2;
+      const duration = 0.5 + Math.random() * 0.5;
+      const width = 1 + Math.random() * 2;
+      const height = 60 + Math.random() * 40;
+      return { i, x, delay, duration, width, height };
+    });
+    setDrops(arr);
+  }, []);
 
   // ルーム購読
   useEffect(() => {
@@ -211,8 +212,8 @@ export default function ChatPage() {
 
   return (
     <div className="w-full h-full overflow-hidden">
-      {/* 雨 */}
-      <div id="rain-container">
+      {/* 雨（SSR差分を許容） */}
+      <div id="rain-container" suppressHydrationWarning>
         {drops.map((d) => (
           <div
             key={d.i}
