@@ -119,7 +119,7 @@ export default function ChatPage() {
     return members.includes('ownerAI') ? 'ownerAI' : '';
   }, [profiles, members, myUid]);
 
-  // ★ ここを修正：localStorage 読みは初回レンダーで行わない（SSRと一致させる）
+  // ローカル保存の復元は初回マウント後
   const [meLocal, setMeLocal] = useState<ProfileSnap>({
     nickname: 'あなた',
     profile: '...',
@@ -281,17 +281,6 @@ export default function ChatPage() {
           <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
             {(hasSystemPeerLeft || peerLeftNotice) && (
               <div className="text-center text-gray-400 text-sm italic my-2">会話相手が退席しました</div>
-            )}
-
-            {/* 最初の演出はオーナー部屋のみ */}
-            {msgs.length === 0 && isOwnerRoom && !hasSystemPeerLeft && !peerLeftNotice && (
-              <div className="flex items-end gap-2 justify-start">
-                <img className="w-8 h-8 rounded-full object-cover" src={OWNER_ICON} alt="" />
-                <div className="chat-bubble other">
-                  <span className="block text-xs font-bold mb-1 text-purple-300">オーナー</span>
-                  <p>いらっしゃい。雨宿りかな？</p>
-                </div>
-              </div>
             )}
 
             {msgs.map((m) => {
