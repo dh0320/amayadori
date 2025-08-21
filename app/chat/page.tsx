@@ -108,9 +108,6 @@ export default function ChatPage() {
   }, [roomId]);
 
   // === 相手/自分のUIDをより堅牢に特定 ===
-  // 1) profiles にキーが入っていればそれを優先
-  // 2) それが無ければ members から自分以外を探す
-  // 3) ownerAI 部屋は 'ownerAI'
   const partnerUid = useMemo(() => {
     const profileKeys = Object.keys(profiles || {});
     const byProfiles = profileKeys.find(k => k !== myUid && k !== 'ownerAI');
@@ -122,20 +119,23 @@ export default function ChatPage() {
     return members.includes('ownerAI') ? 'ownerAI' : '';
   }, [profiles, members, myUid]);
 
-  // localStorage フォールバック（自分側のみ）
-  const meLocal: ProfileSnap = useMemo(() => {
+  // ★ ここを修正：localStorage 読みは初回レンダーで行わない（SSRと一致させる）
+  const [meLocal, setMeLocal] = useState<ProfileSnap>({
+    nickname: 'あなた',
+    profile: '...',
+    icon: DEFAULT_USER_ICON,
+  });
+  useEffect(() => {
     try {
-      return {
+      setMeLocal({
         nickname: localStorage.getItem('amayadori_nickname') || 'あなた',
-        profile: localStorage.getItem('amayadori_profile') || '...',
-        icon: localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
-      };
-    } catch {
-      return { nickname: 'あなた', profile: '...', icon: DEFAULT_USER_ICON };
-    }
+        profile:  localStorage.getItem('amayadori_profile')  || '...',
+        icon:     localStorage.getItem('amayadori_icon')     || DEFAULT_USER_ICON,
+      });
+    } catch {}
   }, []);
 
-  // === 表示用プロフィール ===
+  // 表示用プロフィール（room.profiles を優先、無ければ meLocal）
   const me: ProfileSnap = {
     nickname: profiles[myUid]?.nickname || meLocal.nickname,
     profile:  profiles[myUid]?.profile  || meLocal.profile,
@@ -255,8 +255,8 @@ export default function ChatPage() {
             <div className="flex items-center space-x-3">
               <img className="w-10 h-10 rounded-full object-cover" src={you.icon || DEFAULT_USER_ICON} alt="" />
               <div>
-                <p className="font-bold">{you.nickname || '相手'}</p>
-                <p className="text-xs text-gray-400">{you.profile || '...'}</p>
+                <p className="font-bold" suppressHydrationWarning>{you.nickname || '相手'}</p>
+                <p className="text-xs text-gray-400" suppressHydrationWarning>{you.profile || '...'}</p>
               </div>
             </div>
 
@@ -269,8 +269,8 @@ export default function ChatPage() {
             {/* 自分 + 退室ボタン */}
             <div className="flex items-center space-x-3">
               <div className="text-right">
-                <p className="font-bold">{me.nickname || 'あなた'}</p>
-                <p className="text-xs text-gray-400">{me.profile || '...'}</p>
+                <p className="font-bold" suppressHydrationWarning>{me.nickname || 'あなた'}</p>
+                <p className="text-xs text-gray-400" suppressHydrationWarning>{me.profile || '...'}</p>
               </div>
               <img className="w-10 h-10 rounded-full object-cover" src={me.icon || DEFAULT_USER_ICON} alt="" />
               <button className="btn-exit ml-2" onClick={() => setShowLeaveConfirm(true)}>退室</button>
@@ -404,7 +404,7 @@ export default function ChatPage() {
 
       {/* 退室後広告 */}
       {showPostLeaveAd && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items中心 justify-center">
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
           <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
             <p className="text-sm text-gray-400">広告</p>
             <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
