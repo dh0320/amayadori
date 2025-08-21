@@ -107,11 +107,20 @@ export default function ChatPage() {
     })();
   }, [roomId]);
 
-  // 相手/自分のUID
-  const partnerUid = useMemo(
-    () => members.find((m) => m !== myUid && m !== 'ownerAI') || (members.includes('ownerAI') ? 'ownerAI' : ''),
-    [members, myUid]
-  );
+  // === 相手/自分のUIDをより堅牢に特定 ===
+  // 1) profiles にキーが入っていればそれを優先
+  // 2) それが無ければ members から自分以外を探す
+  // 3) ownerAI 部屋は 'ownerAI'
+  const partnerUid = useMemo(() => {
+    const profileKeys = Object.keys(profiles || {});
+    const byProfiles = profileKeys.find(k => k !== myUid && k !== 'ownerAI');
+    if (byProfiles) return byProfiles;
+
+    const byMembers = members.find(m => m !== myUid && m !== 'ownerAI');
+    if (byMembers) return byMembers;
+
+    return members.includes('ownerAI') ? 'ownerAI' : '';
+  }, [profiles, members, myUid]);
 
   // localStorage フォールバック（自分側のみ）
   const meLocal: ProfileSnap = useMemo(() => {
@@ -126,12 +135,21 @@ export default function ChatPage() {
     }
   }, []);
 
-  // 表示用プロフィール（優先：room.profiles → 自分は localStorage フォールバック）
-  const me: ProfileSnap = { nickname: profiles[myUid]?.nickname || meLocal.nickname, profile: profiles[myUid]?.profile || meLocal.profile, icon: profiles[myUid]?.icon || meLocal.icon };
+  // === 表示用プロフィール ===
+  const me: ProfileSnap = {
+    nickname: profiles[myUid]?.nickname || meLocal.nickname,
+    profile:  profiles[myUid]?.profile  || meLocal.profile,
+    icon:     profiles[myUid]?.icon     || meLocal.icon,
+  };
+
   const you: ProfileSnap =
     partnerUid === 'ownerAI'
       ? { nickname: 'オーナー', profile: '雨宿りカフェのオーナー', icon: OWNER_ICON }
-      : { nickname: profiles[partnerUid]?.nickname || '相手', profile: profiles[partnerUid]?.profile || '...', icon: profiles[partnerUid]?.icon || DEFAULT_USER_ICON };
+      : {
+          nickname: profiles[partnerUid]?.nickname || '相手',
+          profile:  profiles[partnerUid]?.profile  || '...',
+          icon:     profiles[partnerUid]?.icon     || DEFAULT_USER_ICON,
+        };
 
   // 話題候補（最初だけ）
   useEffect(() => {
@@ -231,7 +249,7 @@ export default function ChatPage() {
 
       <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
         <div id="chat-screen" className="w-full h-full flex flex-col glass-card">
-          {/* ヘッダ：相手/自分のプロフィール（ローカル復元込み） */}
+          {/* ヘッダ：相手/自分のプロフィール（room.profiles 優先、ローカル復元込み） */}
           <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
             {/* 相手 */}
             <div className="flex items-center space-x-3">
@@ -386,7 +404,7 @@ export default function ChatPage() {
 
       {/* 退室後広告 */}
       {showPostLeaveAd && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items中心 justify-center">
           <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
             <p className="text-sm text-gray-400">広告</p>
             <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
