@@ -226,19 +226,24 @@ export default function Page() {
     }
   }
 
-  function beaconCancelQueued() {
+  // sendBeacon（成功/失敗を返す）
+  function sendBeaconCancel(): boolean {
     try {
-      if (!isWaitingRef.current) return; // 待機中のみ
       const token = idTokenRef.current;
       const url = beaconUrlRef.current;
-      if (!token || !url) return;
-      const body = new URLSearchParams();
-      body.set('idToken', token);
-      // CORS のプリフライト無しで送るため x-www-form-urlencoded を使用
-      navigator.sendBeacon(url, body);
+      if (!token || !url) return false;
+
+      if ('sendBeacon' in navigator) {
+        const body = new Blob(
+          [`idToken=${encodeURIComponent(token)}`],
+          { type: 'application/x-www-form-urlencoded; charset=UTF-8' }
+        );
+        return navigator.sendBeacon(url, body);
+      }
     } catch {
-      // 失敗しても致命ではない（Callable フォールバックもある）
+      // ignore
     }
+    return false;
   }
   // ===============================================
 
@@ -266,9 +271,7 @@ export default function Page() {
       } catch (e) {
         console.warn('[cancelMyQueuedEntries] callable failed', e);
       }
-
-      // 3) 離脱中でも確実に届けるための sendBeacon（HTTP）
-      beaconCancelQueued();
+      // ※ 明示操作時は Callable で十分。Beacon は pagehide 専用に任せます。
     } catch (e) {
       console.error('[cancelCurrentEntry] failed', e);
     } finally {
@@ -279,34 +282,35 @@ export default function Page() {
     }
   }
 
-  // ページ離脱/非表示の検知
+  // ★ タブ/ウインドウを閉じる・他サイトへ遷移・リロードなど「ページを離れる」時だけ発火
   useEffect(() => {
-    let hideTimer: any = null;
-
-    const onVisibility = () => {
-      if (document.hidden && isWaitingRef.current) {
-        // すぐに Beacon を飛ばす（5秒待たずに即キャンセル合図）
-        beaconCancelQueued();
-        hideTimer = setTimeout(() => { cancelCurrentEntry(); }, 5000);
-      } else if (hideTimer) {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-      }
-    };
     const onPageHide = () => {
       if (!isWaitingRef.current) return;
-      // ページ破棄直前に確実に送る
-      beaconCancelQueued();
-      // Callable も念のため（完了しないこともあるが二重で安全）
-      void cancelCurrentEntry();
+
+      // まず Beacon（最も成功しやすい）
+      const ok = sendBeaconCancel();
+      if (ok) return;
+
+      // フォールバック：keepalive fetch（レスポンスは読まない）
+      try {
+        const token = idTokenRef.current;
+        const url = beaconUrlRef.current;
+        if (!token || !url) return;
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `idToken=${encodeURIComponent(token)}`,
+          keepalive: true,
+          mode: 'no-cors',
+        });
+      } catch {
+        // ignore
+      }
     };
 
-    window.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
     return () => {
-      window.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
-      if (hideTimer) clearTimeout(hideTimer);
     };
   }, []);
 
@@ -521,13 +525,12 @@ export default function Page() {
     ]);
   }
 
-  // 画面破棄時のクリーンアップ（念のため）
+  // 画面破棄時のクリーンアップ（キャンセルは行わない：SPA 内遷移で誤キャンセルを避ける）
   useEffect(() => {
     return () => {
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-      // ページ破棄時にも Beacon を先に飛ばす
-      beaconCancelQueued();
-      cancelCurrentEntry();
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
       if (cdTimerRef.current) clearInterval(cdTimerRef.current);
     };
   }, []);
@@ -552,7 +555,7 @@ export default function Page() {
       </div>
 
       {/* メイン */}
-      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
+      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify中心 p-4">
         {/* プロフィール */}
         {screen === 'profile' && (
           <div id="profile-screen" className="w-full max-w-sm">
@@ -604,7 +607,7 @@ export default function Page() {
                 <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient" onClick={() => handleJoin('country')}>
                   同じ国の人と
                 </button>
-                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
+                <button className="w-full text白 font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
                   世界中の誰かと
                 </button>
 
