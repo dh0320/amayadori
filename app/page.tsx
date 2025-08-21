@@ -1,824 +1,648 @@
-// app/page.tsx
-'use client'
+'use client';
 
-import Link from 'next/link'
-import { useEffect, useRef } from 'react'
-import { Inter, Noto_Serif_JP } from 'next/font/google'
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  addDoc,
+  collection,
+  doc,
+  onSnapshot,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
+import { httpsCallable, getFunctions } from 'firebase/functions';
+import { auth, db, ensureAnon } from '@/lib/firebase';
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
+const DEFAULT_USER_ICON =
+  'https://storage.googleapis.com/amayadori/defaultIcon.png';
+const OWNER_ICON =
+  'https://storage.googleapis.com/amayadori/cafeownerIcon.png';
 
-const notoSerifJP = Noto_Serif_JP({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-noto-serif-jp',
-})
+type Screen = 'profile' | 'region' | 'waiting';
+type Drop = { i: number; x: number; delay: number; duration: number; width: number; height: number };
 
-export default function Home() {
-  const rainRef = useRef<HTMLDivElement | null>(null)
+const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
+
+// --- Functions の HTTP エンドポイント（sendBeacon 用）を自動生成 ---
+// auth.app.options.projectId を優先。なければ環境変数から。
+function resolveCancelBeaconUrl(): string {
+  // @ts-ignore
+  const pid = auth?.app?.options?.projectId || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  return pid ? `https://asia-northeast1-${pid}.cloudfunctions.net/cancelQueuedEntriesHttp` : '';
+}
+
+export default function Page() {
+  const router = useRouter();
+
+  // 画面・状態
+  const [screen, setScreen] = useState<Screen>('profile');
+  const [doorOpen, setDoorOpen] = useState(false);
+
+  // プロフィール（初期復元：トップで入力した内容を常に表示）
+  const [userNickname, setUserNickname] = useState('あなた');
+  const [userIcon, setUserIcon] = useState<string>('');
+  const [userProfile, setUserProfile] = useState('...');
 
   useEffect(() => {
-    // 雨のアニメーション
-    const container = rainRef.current
-    if (!container) return
-    container.innerHTML = '' // 再描画時の二重生成防止
+    try {
+      const nn = localStorage.getItem('amayadori_nickname');
+      const pf = localStorage.getItem('amayadori_profile');
+      const ic = localStorage.getItem('amayadori_icon');
+      if (nn) setUserNickname(nn);
+      if (pf) setUserProfile(pf);
+      if (ic) setUserIcon(ic);
+    } catch {}
+  }, []);
 
-    for (let i = 0; i < 70; i++) {
-      const drop = document.createElement('div')
-      drop.className = 'rain-drop'
-      drop.style.left = `${Math.random() * 100}%`
-      drop.style.animationDelay = `${Math.random() * 2}s`
-      drop.style.animationDuration = `${1.5 + Math.random()}s`
-      container.appendChild(drop)
+  // 待機
+  const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
+  const [ownerPrompt, setOwnerPrompt] = useState(false);
+  const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // エントリー監視/管理（ハートビート＆キャンセル）
+  const entryUnsubRef = useRef<(() => void) | null>(null);
+  const entryIdRef = useRef<string | null>(null);
+  const heartbeatTimerRef = useRef<any>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  // 既存のリワード広告（待機延長用）
+  const [showRewarded, setShowRewarded] = useState(false);
+  const [rewardLeft, setRewardLeft] = useState(5);
+  const [customAlert, setCustomAlert] = useState<string | null>(null);
+
+  // 退室後広告（別タブ対策）
+  const [showPostLeaveAd, setShowPostLeaveAd] = useState(false);
+  const [postLeaveLeft, setPostLeaveLeft] = useState(POST_LEAVE_AD_SEC);
+  const [pendingQueueKey, setPendingQueueKey] = useState<null | 'country' | 'global'>(null);
+  const cdTimerRef = useRef<any>(null);
+
+  // 「今、待機中か？」の参照（ページ離脱検知で使用）
+  const isWaitingRef = useRef(false);
+  useEffect(() => { isWaitingRef.current = (screen === 'waiting'); }, [screen]);
+
+  // 💧 雨（ドロップ）— SSR/CSR差分を避けるため、マウント後に生成
+  const [drops, setDrops] = useState<Drop[]>([]);
+  useEffect(() => {
+    const arr: Drop[] = Array.from({ length: 100 }).map((_, i) => {
+      const x = Math.random() * 100;
+      const delay = Math.random() * 2;
+      const duration = 0.5 + Math.random() * 0.5;
+      const width = 1 + Math.random() * 2;
+      const height = 60 + Math.random() * 40;
+      return { i, x, delay, duration, width, height };
+    });
+    setDrops(arr);
+  }, []);
+
+  // 扉アニメーション
+  function playDoor() {
+    setDoorOpen(true);
+    setTimeout(() => setDoorOpen(false), 1300);
+  }
+
+  // 画像プレビュー
+  function onPickIcon(file?: File) {
+    if (!file) {
+      setUserIcon('');
+      return;
     }
+    const reader = new FileReader();
+    reader.onload = (e) => setUserIcon(String(e.target?.result || ''));
+    reader.readAsDataURL(file);
+  }
 
-    // スクロールに応じたフェードイン
-    const faders = document.querySelectorAll<HTMLElement>('.fade-in-up')
-    const appearOptions = {
-      threshold: 0.2,
-      rootMargin: '0px 0px -50px 0px',
+  // プロフィール送信（保存して region へ）
+  function submitProfile() {
+    const nn = userNickname?.trim() ? userNickname : '名無しさん';
+    const pf = userProfile?.trim() ? userProfile : '...';
+    setUserNickname(nn);
+    setUserProfile(pf);
+    try {
+      localStorage.setItem('amayadori_nickname', nn);
+      localStorage.setItem('amayadori_profile', pf);
+      if (userIcon) localStorage.setItem('amayadori_icon', userIcon);
+    } catch {}
+    setScreen('region');
+  }
+
+  // クールダウン残り秒
+  function remainingCooldownSec(): number {
+    try {
+      const until = Number(localStorage.getItem('amayadori_cd_until') || '0');
+      const left = Math.ceil((until - Date.now()) / 1000);
+      return left > 0 ? left : 0;
+    } catch {
+      return 0;
     }
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return
-        entry.target.classList.add('visible')
-        observer.unobserve(entry.target)
-      })
-    }, appearOptions)
+  }
 
-    faders.forEach((el) => observer.observe(el))
+  // 退室後広告の開始
+  function startPostLeaveAd(initialLeft?: number, autoJoinKey?: 'country' | 'global' | null) {
+    const left = typeof initialLeft === 'number' ? initialLeft : remainingCooldownSec() || POST_LEAVE_AD_SEC;
+    setPostLeaveLeft(left);
+    setShowPostLeaveAd(true);
+    setPendingQueueKey(autoJoinKey ?? null);
+    if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    cdTimerRef.current = setInterval(() => {
+      setPostLeaveLeft((v) => {
+        if (v <= 1) {
+          clearInterval(cdTimerRef.current);
+          setShowPostLeaveAd(false);
+          try { localStorage.removeItem('amayadori_cd_until'); } catch {}
+          if (pendingQueueKey) {
+            const key = pendingQueueKey;
+            setPendingQueueKey(null);
+            handleJoin(key);
+          }
+          return 0;
+        }
+        return v - 1;
+      });
+    }, 1000);
+  }
 
+  // ========= sendBeacon 用：ID トークンの保持と送信 =========
+  const idTokenRef = useRef<string | null>(null);
+  const beaconUrlRef = useRef<string>(resolveCancelBeaconUrl());
+
+  // auth のトークン更新を監視（匿名ログイン後も更新される）
+  useEffect(() => {
+    const unsub = auth.onIdTokenChanged(async (u) => {
+      if (u) {
+        try {
+          idTokenRef.current = await u.getIdToken(/* forceRefresh */ false);
+        } catch {
+          idTokenRef.current = null;
+        }
+      } else {
+        idTokenRef.current = null;
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // 明示的な取得（待機参加直後など、確実に用意しておく）
+  async function ensureIdTokenReady() {
+    await ensureAnon();
+    try {
+      idTokenRef.current = await auth.currentUser!.getIdToken(false);
+    } catch {
+      // noop
+    }
+  }
+
+  // sendBeacon（成功/失敗を返す）
+  function sendBeaconCancel(): boolean {
+    try {
+      const token = idTokenRef.current;
+      const url = beaconUrlRef.current;
+      if (!token || !url) return false;
+
+      if ('sendBeacon' in navigator) {
+        const body = new Blob(
+          [`idToken=${encodeURIComponent(token)}`],
+          { type: 'application/x-www-form-urlencoded; charset=UTF-8' }
+        );
+        return navigator.sendBeacon(url, body);
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+  // ===============================================
+
+  // 待機のキャンセル（entryId が無くても必ずフォールバック実行）
+  async function cancelCurrentEntry() {
+    if (isCancelling) return;           // 多重実行防止
+    setIsCancelling(true);
+    try {
+      await ensureAnon();
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const id = entryIdRef.current;
+
+      // 1) 可能なら個別キャンセル
+      if (id) {
+        try {
+          await httpsCallable(fns, 'cancelEntry')({ entryId: id });
+        } catch (e) {
+          console.warn('[cancelEntry] callable failed, fallback next', e);
+        }
+      }
+
+      // 2) フォールバック：自分の queued を一括キャンセル
+      try {
+        await httpsCallable(fns, 'cancelMyQueuedEntries')({});
+      } catch (e) {
+        console.warn('[cancelMyQueuedEntries] callable failed', e);
+      }
+      // ※ 明示操作時は Callable で十分。Beacon は pagehide 専用に任せます。
+    } catch (e) {
+      console.error('[cancelCurrentEntry] failed', e);
+    } finally {
+      entryIdRef.current = null;
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      setIsCancelling(false);
+    }
+  }
+
+  // ★ タブ/ウインドウを閉じる・他サイトへ遷移・リロードなど「ページを離れる」時だけ発火
+  useEffect(() => {
+    const onPageHide = () => {
+      if (!isWaitingRef.current) return;
+
+      // まず Beacon（最も成功しやすい）
+      const ok = sendBeaconCancel();
+      if (ok) return;
+
+      // フォールバック：keepalive fetch（レスポンスは読まない）
+      try {
+        const token = idTokenRef.current;
+        const url = beaconUrlRef.current;
+        if (!token || !url) return;
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `idToken=${encodeURIComponent(token)}`,
+          keepalive: true,
+          mode: 'no-cors',
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('pagehide', onPageHide);
     return () => {
-      observer.disconnect()
-      if (container) container.innerHTML = ''
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, []);
+
+  // エントランス到達時、残CDがあれば広告表示
+  useEffect(() => {
+    const left = remainingCooldownSec();
+    if (left > 0) startPostLeaveAd(left, null);
+    return () => {
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    };
+  }, []);
+
+  // ▼ 待機キュー参加：プロフィール同梱 + ハートビート & キャンセル ▼
+  async function handleJoin(queueKey: 'country' | 'global') {
+    try {
+      const left = remainingCooldownSec();
+      if (left > 0) {
+        startPostLeaveAd(left, queueKey);
+        return;
+      }
+
+      await ensureAnon();
+      await ensureIdTokenReady(); // ← 離脱検知用 Beacon に備え、先にトークンを確保
+      const uid = auth.currentUser?.uid;
+      if (!uid) throw new Error('auth unavailable');
+
+      setOwnerPrompt(false);
+      setScreen('waiting');
+
+      // 監視/タイマー停止
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      entryIdRef.current = null;
+
+      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'enter');
+      const profile = {
+        nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+        profile: userProfile || localStorage.getItem('amayadori_profile') || '...',
+        icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
+      };
+
+      let entryId: string | undefined;
+      try {
+        const res = (await fn({ queueKey, profile })) as any;
+        const status = res?.data?.status as string | undefined;
+        if (status === 'denied') {
+          setWaitingMessage('今日は条件外でした');
+          setTimeout(() => setScreen('region'), 2000);
+          return;
+        }
+        if (status === 'cooldown') {
+          const leftServer = Number(res?.data?.retryAfterSec ?? 30);
+          try { localStorage.setItem('amayadori_cd_until', String(Date.now() + leftServer * 1000)); } catch {}
+          startPostLeaveAd(leftServer, queueKey);
+          return;
+        }
+        entryId = res?.data?.entryId as string | undefined;
+      } catch (err) {
+        console.warn('[enter] callable error, fallback to client entry', err);
+      }
+
+      if (!entryId) {
+        const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
+        const ref = await addDoc(collection(db, 'matchEntries'), {
+          uid,
+          queueKey,
+          status: 'queued',
+          createdAt: serverTimestamp(),
+          lastSeenAt: serverTimestamp(),
+          expiresAt,
+          source: 'client-fallback',
+          profile,
+        });
+        entryId = ref.id;
+      }
+
+      // entryId を保持
+      entryIdRef.current = entryId;
+
+      // ハートビート（10秒おきに lastSeenAt 更新）
+      const touch = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'touchEntry');
+      heartbeatTimerRef.current = setInterval(() => {
+        const id = entryIdRef.current;
+        if (!id) return;
+        touch({ entryId: id }).catch(() => {});
+      }, 10_000);
+
+      // 自分の1件だけを監視 → matched で /chat へ
+      entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
+        const d = snap.data() as any | undefined;
+        if (!d) return;
+        if (d.status === 'matched' && d.roomId) {
+          // 片付けてルームへ
+          if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+          if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+          entryIdRef.current = null;
+          router.push(`/chat?room=${encodeURIComponent(d.roomId)}`);
+        }
+        if (d.info === 'paired_today') setWaitingMessage('今日は同じ相手とは再マッチしません。別の相手を探しています…');
+        else if (d.info === 'waiting') setWaitingMessage('マッチング相手を探しています...');
+        if (d.status === 'denied') {
+          setWaitingMessage('今日は条件外でした');
+          setTimeout(() => setScreen('region'), 2000);
+        }
+        if (d.status === 'stale' || d.status === 'canceled' || d.status === 'expired') {
+          setWaitingMessage('待機が中断されました。もう一度お試しください。');
+          setTimeout(() => setScreen('region'), 1500);
+        }
+      });
+
+      // 20秒でオーナー提案
+      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || '入室に失敗しました');
+      setScreen('region');
     }
-  }, [])
+  }
+
+  // 待機 → オーナー（実API）に切り替える：必ず待機キャンセル → ルーム作成 → /chat 遷移
+  async function startChatWithOwner() {
+    try {
+      await cancelCurrentEntry();            // ★ 確実にキャンセル
+      setOwnerPrompt(false);
+      playDoor();
+
+      await ensureAnon();
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const profile = {
+        nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+        profile:  userProfile  || localStorage.getItem('amayadori_profile')  || '...',
+        icon:     userIcon     || localStorage.getItem('amayadori_icon')     || DEFAULT_USER_ICON,
+      };
+      const res = (await httpsCallable(fns, 'startOwnerRoom')({ profile })) as any;
+      const roomId: string | undefined = res?.data?.roomId;
+      if (!roomId) throw new Error('room create failed');
+
+      setTimeout(() => {
+        router.push(`/chat?room=${encodeURIComponent(roomId)}`);
+      }, 600);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || 'オーナーとの会話を開始できませんでした');
+      setScreen('region');
+    }
+  }
+
+  // 待機をやめる（ボタン）
+  async function abortWaiting() {
+    await cancelCurrentEntry();
+    setScreen('region');
+  }
+
+  // リワード広告（ダミー）→ 待機延長
+  function showRewardedAd() {
+    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+    setOwnerPrompt(false);
+    setShowRewarded(true);
+    setRewardLeft(5);
+    const timer = setInterval(() => {
+      setRewardLeft((v) => {
+        if (v <= 1) {
+          clearInterval(timer);
+          setShowRewarded(false);
+          waitLonger();
+        }
+        return v - 1;
+      });
+    }, 1000);
+  }
+  function waitLonger() {
+    setWaitingMessage('もう少し待ってみます...');
+    waitingTimerRef.current = setTimeout(() => {
+      setWaitingMessage('マッチング相手を探しています...');
+      setOwnerPrompt(true);
+    }, 20000);
+  }
+
+  // 画面破棄時のクリーンアップ（キャンセルは行わない：SPA 内遷移で誤キャンセルを避ける）
+  useEffect(() => {
+    return () => {
+      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      if (cdTimerRef.current) clearInterval(cdTimerRef.current);
+    };
+  }, []);
 
   return (
-    <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
-      {/* グローバルスタイル（HTMLの<style>を移植） */}
-      <style jsx global>{`
-        body {
-          font-family: var(--font-inter), 'Inter', 'Noto Serif JP', serif;
-          background-color: #1a202c; /* 深い夜空の色 */
-          color: #e2e8f0;
-          overflow-x: hidden;
-        }
-        .font-serif {
-          font-family: var(--font-noto-serif-jp), 'Noto Serif JP', serif;
-        }
-        .glass-effect {
-          background: rgba(26, 32, 44, 0.6);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        .rain-drop {
-          position: absolute;
-          bottom: 100%;
-          width: 1.5px;
-          height: 70px;
-          background: linear-gradient(
-            to bottom,
-            rgba(255, 255, 255, 0),
-            rgba(255, 255, 255, 0.3)
-          );
-          animation: fall 2.5s linear infinite;
-        }
-        @keyframes fall {
-          to {
-            transform: translateY(100vh);
-          }
-        }
-        .fade-in-up {
-          opacity: 0;
-          transform: translateY(20px);
-          transition: opacity 0.8s ease-out, transform 0.8s ease-out;
-        }
-        .fade-in-up.visible {
-          opacity: 1;
-          transform: translateY(0);
-        }
-        .text-glow {
-          text-shadow: 0 0 8px rgba(199, 210, 254, 0.5),
-            0 0 20px rgba(165, 180, 252, 0.3);
-        }
-      `}</style>
+    <div className="w-full h-full overflow-hidden">
+      {/* 雨アニメーション（SSRとCSRの差異許容） */}
+      <div id="rain-container" suppressHydrationWarning>
+        {drops.map((d) => (
+          <div
+            key={d.i}
+            className="rain-drop"
+            style={{
+              left: `${d.x}%`,
+              animationDelay: `${d.delay}s`,
+              animationDuration: `${d.duration}s`,
+              width: `${d.width}px`,
+              height: `${d.height}px`,
+            }}
+          />
+        ))}
+      </div>
 
-      {/* 背景の雨アニメーション */}
-      <div
-        ref={rainRef}
-        id="rain-container"
-        className="fixed top-0 left-0 w-full h-full -z-10 pointer-events-none"
-      />
-
-      {/* ヘッダー */}
-      <header className="fixed top-0 left-0 w-full p-4 z-50 glass-effect">
-        <div className="container mx-auto flex justify-between items-center">
-          <h1 className="text-2xl font-serif font-bold text-white">Amayadori</h1>
-          {/* ここを /amayadori へのリンクに、文言を「チャットを始める」に変更 */}
-          <Link
-            href="/amayadori"
-            className="bg-indigo-400 text-white font-bold py-2 px-5 rounded-full hover:bg-indigo-500 transition-all duration-300 text-sm"
-          >
-            チャットを始める
-          </Link>
-        </div>
-      </header>
-
-      <main>
-        {/* ファーストビュー */}
-        <section className="h-screen w-full flex flex-col justify-center items-center text-center p-4 relative">
-          <div className="absolute inset-0 bg-black opacity-30" />
-          <div className="z-10">
-            <h2 className="text-4xl md:text-6xl font-serif font-bold leading-tight mb-4 text-glow">
-              億劫な天気の音が、<br />
-              誰かの声に変わる。
-            </h2>
-            <p className="text-lg md:text-xl text-indigo-100 mb-8 max-w-2xl mx-auto font-serif">
-              雨の日、猛暑の日、凍えるような寒い日。<br />
-              そんな外出が億劫な日が、見知らぬ誰かとの束の間の出会いの舞台になる。
-            </p>
-            <a
-              href="#pre-register"
-              className="bg-white text-gray-800 font-bold py-3 px-8 rounded-full text-lg hover:bg-gray-200 transition-all duration-300 shadow-lg shadow-indigo-500/20"
-            >
-              事前登録して最新情報を受け取る
-            </a>
-          </div>
-        </section>
-
-        {/* 課題提起セクション */}
-        <section className="py-20 md:py-32 px-4">
-          <div className="container mx-auto text-center">
-            <h3 className="text-3xl md:text-4xl font-serif font-bold mb-12 fade-in-up">
-              こんな気持ち、ありませんか？
-            </h3>
-            <div className="grid md:grid-cols-3 gap-8">
-              {/* Card 1 */}
-              <div
-                className="glass-effect rounded-2xl p-8 fade-in-up"
-                style={{ transitionDelay: '100ms' }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="48"
-                  height="48"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mx-auto mb-4 text-indigo-300"
-                >
-                  <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />
-                  <path d="M8 12h8" />
-                  <path d="M12 8v8" />
-                </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">退屈な毎日</h4>
-                <p className="text-indigo-200">
-                  同じことの繰り返し。<br />
-                  何か新しい刺激がほしい。
-                </p>
+      {/* メイン */}
+      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
+        {/* プロフィール */}
+        {screen === 'profile' && (
+          <div id="profile-screen" className="w-full max-w-sm">
+            <div className="glass-card p-8 text-center space-y-6 fade-in">
+              <h1 className="text-3xl font-bold tracking-wider">Amayadori</h1>
+              <p className="text-sm text-gray-400">雨がやむまで、少しだけ。</p>
+              <div className="flex justify-center">
+                <label className="cursor-pointer">
+                  <img
+                    className="w-28 h-28 rounded-full object-cover border-4 border-dashed border-gray-500 hover:border-gray-400 transition-all"
+                    src={userIcon || DEFAULT_USER_ICON}
+                    alt="icon preview"
+                  />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => onPickIcon(e.target.files?.[0] || undefined)}
+                  />
+                </label>
               </div>
-              {/* Card 2 */}
-              <div
-                className="glass-effect rounded-2xl p-8 fade-in-up"
-                style={{ transitionDelay: '200ms' }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="48"
-                  height="48"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mx-auto mb-4 text-indigo-300"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">SNS疲れ</h4>
-                <p className="text-indigo-200">
-                  「いいね」やフォロワーを気にするのに、<br />
-                  少し疲れちゃった。
-                </p>
-              </div>
-              {/* Card 3 */}
-              <div
-                className="glass-effect rounded-2xl p-8 fade-in-up"
-                style={{ transitionDelay: '300ms' }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="48"
-                  height="48"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mx-auto mb-4 text-indigo-300"
-                >
-                  <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-                  <path d="M8 12h.01" />
-                  <path d="M12 12h.01" />
-                  <path d="M16 12h.01" />
-                </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">
-                  誰かと話したい、でも…
-                </h4>
-                <p className="text-indigo-200">
-                  気兼ねなく話したいけど、<br />
-                  人間関係は少し面倒。
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 解決策・コンセプト紹介 */}
-        <section className="py-20 md:py-32 px-4 bg-black bg-opacity-20">
-          <div className="container mx-auto">
-            <div className="text-center mb-16">
-              <p className="text-indigo-400 font-bold mb-2 fade-in-up">
-                OUR CONCEPT
-              </p>
-              <h3
-                className="text-4xl md:text-5xl font-serif font-bold mb-4 fade-in-up"
-                style={{ transitionDelay: '100ms' }}
-              >
-                特別な天気の日、<br className="md:hidden" />
-                特別な場所が現れる。
-              </h3>
-              <p
-                className="text-lg text-indigo-200 max-w-3xl mx-auto fade-in-up"
-                style={{ transitionDelay: '200ms' }}
-              >
-                Amayadoriは、あなたの現在地が雨・猛暑・極寒など、
-                <br />
-                特別な気象条件の時だけアクセスできる、完全匿名のチャットアプリです。
-              </p>
-            </div>
-
-            <div className="grid md:grid-cols-3 gap-10 text-center">
-              {/* Feature 1 */}
-              <div className="fade-in-up" style={{ transitionDelay: '300ms' }}>
-                <div className="w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center glass-effect">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-indigo-300"
-                  >
-                    <path d="M21.2 15c.7-1.2 1-2.5.7-3.9-.6-2.4-3.4-4.3-6-4.3-1.4 0-2.7.5-3.8 1.4 1.3-.6 2.8-.9 4.3-.9 2.5 0 4.6 1.7 5.3 4 .3 1 .2 2.1-.1 3.1z" />
-                    <path d="M6.5 14.5A2.5 2.5 0 0 0 9 12c0-1.7-1.5-3-3.5-3S2 10.3 2 12c0 1.4 1.1 2.5 2.5 2.5Z" />
-                    <path d="M16 22a3 3 0 0 0 3-3c0-1.7-1.5-3-3.5-3s-3.5 1.3-3.5 3c0 1.7 1.5 3 3.5 3Z" />
-                    <path d="M22 17a2 2 0 0 0 2-2c0-1.1-.9-2-2-2s-2 .9-2 2c0 1.1.9 2 2 2Z" />
-                    <path d="M4.6 18.2A2 2 0 0 0 6 17c0-1.1-.9-2-2-2s-2 .9-2 2c0 1.1.9 2 2 2Z" />
-                  </svg>
-                </div>
-                <h4 className="text-2xl font-serif font-bold mb-2">
-                  一期一会の出会い
-                </h4>
-                <p className="text-indigo-200">
-                  天候が変わると、チャットルームは泡のように消える。会話のログも残りません。その瞬間にしかない、儚い繋がりを楽しんで。
-                </p>
-              </div>
-              {/* Feature 2 */}
-              <div className="fade-in-up" style={{ transitionDelay: '400ms' }}>
-                <div className="w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center glass-effect">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-indigo-300"
-                  >
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    <path d="m9 12 2 2 4-4" />
-                  </svg>
-                </div>
-                <h4 className="text-2xl font-serif font-bold mb-2">
-                  心安らぐ匿名性
-                </h4>
-                <p className="text-indigo-200">
-                  プロフィール登録は一切不要。ニックネームは自動で割り振られます。あなたは「傘を忘れた人」や「窓を叩く雨音」になるかもしれません。
-                </p>
-              </div>
-              {/* Feature 3 */}
-              <div className="fade-in-up" style={{ transitionDelay: '500ms' }}>
-                <div className="w-24 h-24 mx-auto mb-6 rounded-full flex items-center justify-center glass-effect">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-indigo-300"
-                  >
-                    <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
-                    <path d="M22 10a3 3 0 0 0-3-3h-2.207a5.502 5.502 0 0 0-10.702.5" />
-                  </svg>
-                </div>
-                <h4 className="text-2xl font-serif font-bold mb-2">
-                  同じ状況下の共感
-                </h4>
-                <p className="text-indigo-200">
-                  ここにいるのは、みんな同じ状況を過ごす人たち。「この天気、すごいね」その一言から、自然な会話が始まります。
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* How it Works セクション */}
-        <section className="py-20 md:py-32 px-4">
-          <div className="container mx-auto">
-            <div className="text-center mb-16">
-              <h3 className="text-3xl md:text-4xl font-serif font-bold fade-in-up">
-                Amayadoriの始め方
-              </h3>
-            </div>
-            <div className="flex flex-col md:flex-row justify-center items-center gap-8 md:gap-16">
-              <div className="w-full md:w-1/3 max-w-xs fade-in-up">
-                <img
-                  src="https://image.pollinations.ai/prompt/A%20beautiful%20anime-style%20mockup%20of%20a%20smartphone.%20On%20the%20screen%20is%20a%20minimalist%20chat%20app%20with%20a%20dark%20theme.%20Through%20a%20window%20behind%20the%20phone,%20you%20can%20see%20a%20city%20street%20at%20night%20with%20rain%20streaking%20down%20the%20glass.%20glowing%20neon%20signs%20are%20reflected%20in%20the%20puddles.%20cinematic,%20moody,%20lo-fi%20aesthetic,%20digital%20art?model=flux&w=512&h=800&seed=123"
-                  alt="雨の日の夜にチャットアプリを開いたスマートフォンのイラスト"
-                  className="rounded-3xl shadow-2xl shadow-indigo-900/40"
-                />
-              </div>
-              <div className="w-full md:w-1/2">
-                <ol className="space-y-8">
-                  <li
-                    className="flex items-start fade-in-up"
-                    style={{ transitionDelay: '100ms' }}
-                  >
-                    <div className="text-3xl font-bold font-serif text-indigo-400 mr-6">
-                      1.
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-bold font-serif mb-1">
-                        特別な天気を待つ
-                      </h4>
-                      <p className="text-indigo-200">
-                        アプリが使えるのは特別な天気の日だけ。通知をONにしておけば、その時にお知らせします。
-                      </p>
-                    </div>
-                  </li>
-                  <li
-                    className="flex items-start fade-in-up"
-                    style={{ transitionDelay: '200ms' }}
-                  >
-                    <div className="text-3xl font-bold font-serif text-indigo-400 mr-6">
-                      2.
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-bold font-serif mb-1">
-                        シェルターへ
-                      </h4>
-                      <p className="text-indigo-200">
-                        アプリを開くと、同じ状況の人が集う「シェルター」に自動で案内されます。
-                      </p>
-                    </div>
-                  </li>
-                  <li
-                    className="flex items-start fade-in-up"
-                    style={{ transitionDelay: '300ms' }}
-                  >
-                    <div className="text-3xl font-bold font-serif text-indigo-100 mr-6">
-                      3.
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-bold font-serif mb-1">
-                        束の間の会話を楽しむ
-                      </h4>
-                      <p className="text-indigo-200">
-                        同じ空の下にいる誰かと、他愛もない話を。普段は言えない本音も、ここなら話せるかも。
-                      </p>
-                    </div>
-                  </li>
-                  <li
-                    className="flex items-start fade-in-up"
-                    style={{ transitionDelay: '400ms' }}
-                  >
-                    <div className="text-3xl font-bold font-serif text-indigo-400 mr-6">
-                      4.
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-bold font-serif mb-1">
-                        そして、天気は変わる
-                      </h4>
-                      <p className="text-indigo-200">
-                        天候が穏やかになると、チャットルームは自動的に閉じられます。「また、次の特別な天気の日に」
-                      </p>
-                    </div>
-                  </li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 料金プランセクション */}
-        <section className="py-20 md:py-32 px-4 bg-black bg-opacity-20">
-          <div className="container mx-auto">
-            <div className="text-center mb-16">
-              <h3 className="text-3xl md:text-4xl font-serif font-bold fade-in-up">
-                あなたに合った楽しみ方を
-              </h3>
-              <p
-                className="text-lg text-indigo-200 max-w-3xl mx-auto mt-4 fade-in-up"
-                style={{ transitionDelay: '100ms' }}
-              >
-                Amayadoriは、あなたの気分に合わせて3つのスタイルで楽しめます。
-              </p>
-            </div>
-            <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-              {/* Plan 1: Guest */}
-              <div
-                className="glass-effect rounded-2xl p-8 flex flex-col fade-in-up"
-                style={{ transitionDelay: '200ms' }}
-              >
-                <h4 className="text-2xl font-serif font-bold mb-4">
-                  ふらっと立ち寄る
-                </h4>
-                <p className="text-indigo-200 mb-6 flex-grow">
-                  ログイン不要で、今すぐ参加。その場限りの出会いを、最も気軽に。
-                </p>
-                <ul className="space-y-3 text-left">
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    都度のプロフィール設定
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    リアルタイムマッチング
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-gray-500 mr-3"
-                    >
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                    <span className="text-gray-400">AIとの会話</span>
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-gray-500 mr-3"
-                    >
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                    <span className="text-gray-400">
-                      思い出のしおり (AI要約)
-                    </span>
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-gray-500 mr-3"
-                    >
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                    <span className="text-gray-400">伝言板機能</span>
-                  </li>
-                </ul>
-                <div className="mt-8 pt-4 border-t border-gray-700">
-                  <p className="text-sm text-gray-400">広告が表示されます</p>
-                </div>
-              </div>
-
-              {/* Plan 2: Free User */}
-              <div
-                className="glass-effect rounded-2xl p-8 flex flex-col border-2 border-indigo-400 shadow-lg shadow-indigo-500/20 fade-in-up"
-                style={{ transitionDelay: '300ms' }}
-              >
-                <h4 className="text-2xl font-serif font-bold mb-4">
-                  いつもの場所へ
-                </h4>
-                <p className="text-indigo-200 mb-6 flex-grow">
-                  無料登録で、あなただけのプロフィールを。マッチングしない時は、カフェオーナーのAIと一息。
-                </p>
-                <ul className="space-y-3 text-left">
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    プロフィール登録
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    リアルタイムマッチング
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    AIとの会話 (オーナー)
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-gray-500 mr-3"
-                    >
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                    <span className="text-gray-400">
-                      思い出のしおり (AI要約)
-                    </span>
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-gray-500 mr-3"
-                    >
-                      <path d="M18 6 6 18" />
-                      <path d="m6 6 12 12" />
-                    </svg>
-                    <span className="text-gray-400">伝言板機能</span>
-                  </li>
-                </ul>
-                <div className="mt-8 pt-4 border-t border-gray-700">
-                  <p className="text-sm text-gray-400">広告が表示されます</p>
-                </div>
-              </div>
-
-              {/* Plan 3: Premium */}
-              <div
-                className="glass-effect rounded-2xl p-8 flex flex-col fade-in-up"
-                style={{ transitionDelay: '400ms' }}
-              >
-                <h4 className="text-2xl font-serif font-bold mb-4">
-                  特別な一席を
-                </h4>
-                <p className="text-indigo-200 mb-6 flex-grow">
-                  広告なしの快適な空間で、全ての機能を。AI要約や伝言板で、儚い出会いを未来へ繋ぐ。
-                </p>
-                <ul className="space-y-3 text-left">
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    プロフィール登録
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    リアルタイムマッチング
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    AIとの会話 (複数)
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    思い出のしおり (AI要約)
-                  </li>
-                  <li className="flex items-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-green-400 mr-3"
-                    >
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                    伝言板機能
-                  </li>
-                </ul>
-                <div className="mt-8 pt-4 border-t border-gray-700">
-                  <p className="text-sm text-green-400 font-bold">広告なし</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 事前登録セクション */}
-        <section id="pre-register" className="py-20 md:py-32 px-4">
-          <div className="container mx-auto text-center max-w-2xl">
-            <h3 className="text-3xl md:text-4xl font-serif font-bold mb-4 fade-in-up">
-              次の特別な天気の日に、会いましょう。
-            </h3>
-            <p
-              className="text-lg text-indigo-200 mb-8 fade-in-up"
-              style={{ transitionDelay: '100ms' }}
-            >
-              Amayadoriは現在、最初の特別な天気を待っています。
-              <br />
-              メールアドレスを登録して、アプリのリリースや最新情報をいち早く受け取りませんか？
-            </p>
-            <form
-              className="w-full max-w-lg mx-auto flex flex-col sm:flex-row gap-4 fade-in-up"
-              style={{ transitionDelay: '200ms' }}
-            >
               <input
-                type="email"
-                placeholder="your.email@example.com"
-                required
-                className="flex-grow bg-gray-700 border border-gray-600 rounded-full px-6 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all w-full"
+                type="text"
+                className="w-full px-4 py-3 input-glass"
+                placeholder="ニックネーム"
+                value={userNickname === 'あなた' ? '' : userNickname}
+                onChange={(e) => setUserNickname(e.target.value)}
               />
-              <button
-                type="submit"
-                className="bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition-all duration-300 shadow-lg shadow-indigo-500/30 w-full sm:w-auto"
-              >
-                登録する
+              <textarea
+                className="w-full px-4 py-3 input-glass h-24 resize-none"
+                placeholder="ひとことプロフィール"
+                value={userProfile === '...' ? '' : userProfile}
+                onChange={(e) => setUserProfile(e.target.value)}
+              />
+              <button onClick={submitProfile} className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient">
+                次へ
               </button>
-            </form>
+            </div>
           </div>
-        </section>
-      </main>
+        )}
 
-      {/* フッター */}
-      <footer className="py-8 px-4">
-        <div className="container mx-auto text-center text-sm text-gray-500">
-          <p>&copy; 2025 Amayadori Project. All rights reserved.</p>
+        {/* 国/グローバル選択 */}
+        {screen === 'region' && (
+          <div id="region-selection-screen" className="w-full max-w-sm">
+            <div className="glass-card p-8 text-center space-y-6 fade-in">
+              <h2 className="text-2xl font-bold">どちらのカフェへ？</h2>
+              <p className="text-sm text-gray-400">雨宿りの場所を選んでください。</p>
+              <div className="space-y-4">
+                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient" onClick={() => handleJoin('country')}>
+                  同じ国の人と
+                </button>
+                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
+                  世界中の誰かと
+                </button>
+
+                {/* ネイティブ広告（ダミー） */}
+                <div
+                  className="p-3 rounded-xl border border-dashed border-yellow-500/50 text-left cursor-pointer hover:bg-yellow-500/10 transition-colors"
+                  onClick={() => setCustomAlert('【PR】特別な夜のカフェへのご招待です。詳細はWebサイトをご覧ください。')}
+                >
+                  <p className="text-xs text-yellow-500 font-bold">【PR】</p>
+                  <p className="font-semibold text-white">星降る夜のカフェへご招待</p>
+                  <p className="text-sm text-gray-400">今夜だけの特別な体験を。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 待機 */}
+        {screen === 'waiting' && (
+          <div id="waiting-screen" className="w-full max-w-sm text-center">
+            <div className="glass-card p-8 space-y-6 fade-in">
+              <div className="flex justify-center items-center">
+                <div className="spinner w-12 h-12 rounded-full border-4"></div>
+              </div>
+              <h2 id="waiting-message" className="text-2xl font-bold">{waitingMessage}</h2>
+              <p className="text-sm text-gray-400">雨の中、誰かが来るのを待っています。</p>
+
+              {/* 待機をやめる */}
+              <button
+                className="mt-2 text-sm text-gray-300 underline disabled:opacity-50"
+                onClick={abortWaiting}
+                disabled={isCancelling}
+              >
+                {isCancelling ? 'キャンセル中...' : '待機をやめて戻る'}
+              </button>
+
+              {ownerPrompt && (
+                <div id="owner-prompt-modal" className="fade-in pt-4 mt-4 border-t border-gray-700/50">
+                  <p className="mb-4">
+                    雨宿りのお客様がいないようです。
+                    <br />
+                    カフェのオーナーと話をしますか？
+                  </p>
+                  <div className="flex flex-col sm:flex-row justify-center gap-4">
+                    <button onClick={startChatWithOwner} className="text-white font-bold py-2 px-6 rounded-lg btn-gradient">
+                      話す
+                    </button>
+                    <button onClick={showRewardedAd} className="text-white font-bold py-2 px-6 rounded-lg btn-secondary">
+                      広告を見て待つ
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 扉アニメーション */}
+      <div
+        id="door-animation"
+        className={`fixed inset-0 z-50 flex pointer-events-none ${doorOpen ? 'open' : ''} ${doorOpen ? '' : 'hidden'}`}
+      >
+        <div className="door left"></div>
+        <div className="door right"></div>
+      </div>
+
+      {showRewarded && (
+        <div id="rewarded-ad-screen" className="fixed inset-0 bg-black/80 z-50 flex-col items-center justify-center flex">
+          <div className="glass-card p-8 text-center space-y-4">
+            <div className="spinner w-12 h-12 rounded-full border-4 mx-auto"></div>
+            <h2 className="text-xl font-bold">リワード広告を視聴中...</h2>
+            <p id="reward-timer" className="text-lg">{rewardLeft}</p>
+          </div>
         </div>
-      </footer>
+      )}
+
+      {/* カスタムアラート（PR） */}
+      {customAlert && (
+        <div id="custom-alert" className="fixed inset-0 bg-black/80 z-50 items-center justify-center flex">
+          <div className="glass-card p-8 text-center space-y-4 max-w-sm mx-4">
+            <p id="custom-alert-message">{customAlert}</p>
+            <button
+              id="custom-alert-close"
+              className="mt-4 text-white font-bold py-2 px-6 rounded-lg btn-secondary"
+              onClick={() => setCustomAlert(null)}
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 退室後広告（別タブ再入室対策） */}
+      {showPostLeaveAd && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
+          <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
+            <p className="text-sm text-gray-400">広告</p>
+            <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
+              <p className="px-6">ここにインタースティシャル広告（SDK/タグ）を差し込み</p>
+            </div>
+            <p className="text-gray-300">閉じるまで {postLeaveLeft} 秒</p>
+          </div>
+        </div>
+      )}
     </div>
-  )
+  );
 }
