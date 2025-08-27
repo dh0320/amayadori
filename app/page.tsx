@@ -2,8 +2,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Inter, Noto_Serif_JP } from 'next/font/google'
+import { getFunctions, httpsCallable } from 'firebase/functions'
+import { ensureAnon } from '@/lib/firebase'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -18,6 +20,17 @@ const notoSerifJP = Noto_Serif_JP({
 
 export default function Home() {
   const rainRef = useRef<HTMLDivElement | null>(null)
+
+  // 問い合わせ/要望フォームの状態
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [category, setCategory] = useState<'問い合わせ' | '要望'>('問い合わせ')
+  const [message, setMessage] = useState('')
+  const [agree, setAgree] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hp, setHp] = useState('') // honeypot（スパム対策）
 
   useEffect(() => {
     // 雨のアニメーション
@@ -56,10 +69,65 @@ export default function Home() {
     }
   }, [])
 
+  async function onSubmitContact(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setError(null)
+    setDone(false)
+
+    // 基本バリデーション
+    if (!message.trim()) {
+      setError('内容を入力してください。')
+      return
+    }
+    if (!agree) {
+      setError('利用規約およびプライバシーポリシーに同意してください。')
+      return
+    }
+    if (hp.trim() !== '') {
+      // honeypot（ボット）→ 成功扱いにして黙って終了
+      setDone(true)
+      setMessage('')
+      setName('')
+      setEmail('')
+      return
+    }
+
+    try {
+      setSending(true)
+      await ensureAnon()
+      const fns = getFunctions(undefined, 'asia-northeast1')
+
+      // Callable には text 1本で送る（Functions側で整形しやすいように）
+      const text =
+        `【カテゴリ】${category}\n` +
+        `【お名前】${name || '(未記入)'}\n` +
+        `【メール】${email || '(未記入)'}\n` +
+        `【本文】\n${message}`
+
+      const call = httpsCallable(fns, 'sendContact')
+      await call({ text })
+      setDone(true)
+      setMessage('')
+      setName('')
+      setEmail('')
+    } catch (err: any) {
+      console.error(err)
+      setError('送信に失敗しました。お手数ですが時間をおいて再度お試しください。')
+    } finally {
+      setSending(false)
+    }
+  }
+
   return (
     <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
       {/* グローバルスタイル（HTMLの<style>を移植） */}
       <style jsx global>{`
+        html, body {
+          scroll-behavior: smooth; /* スムーススクロール */
+        }
+        #contact {
+          scroll-margin-top: 96px; /* 固定ヘッダー分のオフセット */
+        }
         body {
           font-family: var(--font-inter), 'Inter', 'Noto Serif JP', serif;
           background-color: #1a202c; /* 深い夜空の色 */
@@ -118,13 +186,24 @@ export default function Home() {
       <header className="fixed top-0 left-0 w-full p-4 z-50 glass-effect">
         <div className="container mx-auto flex justify-between items-center">
           <h1 className="text-2xl font-serif font-bold text-white">Amayadori</h1>
-          {/* ここを /amayadori へのリンクに、文言を「チャットを始める」に変更 */}
-          <Link
-            href="/amayadori"
-            className="bg-indigo-400 text-white font-bold py-2 px-5 rounded-full hover:bg-indigo-500 transition-all duration-300 text-sm"
-          >
-            チャットを始める
-          </Link>
+          <div className="flex items-center gap-3">
+            {/* 既存導線：/amayadori へ遷移（文言変更） */}
+            <Link
+              href="/amayadori"
+              className="bg-indigo-400 text-white font-bold py-2 px-5 rounded-full hover:bg-indigo-500 transition-all duration-300 text-sm"
+            >
+              Amayadoriを始める
+            </Link>
+
+            {/* 追加：問い合わせ/要望（ページ下部へスクロール） */}
+            <a
+              href="#contact"
+              className="border border-indigo-300 text-indigo-300 font-bold py-2 px-5 rounded-full hover:bg-indigo-500 hover:text-white transition-all duration-300 text-sm"
+              aria-label="問い合わせ・要望フォームへ移動"
+            >
+              問い合わせ/要望
+            </a>
+          </div>
         </div>
       </header>
 
@@ -141,12 +220,13 @@ export default function Home() {
               雨の日、猛暑の日、凍えるような寒い日。<br />
               そんな外出が億劫な日が、見知らぬ誰かとの束の間の出会いの舞台になる。
             </p>
-            <a
-              href="#pre-register"
+            {/* ここを「Amayadoriを始める」→ /amayadori へ遷移 */}
+            <Link
+              href="/amayadori"
               className="bg-white text-gray-800 font-bold py-3 px-8 rounded-full text-lg hover:bg-gray-200 transition-all duration-300 shadow-lg shadow-indigo-500/20"
             >
-              事前登録して最新情報を受け取る
-            </a>
+              Amayadoriを始める
+            </Link>
           </div>
         </section>
 
@@ -778,8 +858,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* 事前登録セクション */}
-        <section id="pre-register" className="py-20 md:py-32 px-4">
+        {/* 問い合わせ/要望 セクション */}
+        <section id="contact" className="py-20 md:py-32 px-4">
           <div className="container mx-auto text-center max-w-2xl">
             <h3 className="text-3xl md:text-4xl font-serif font-bold mb-4 fade-in-up">
               次の特別な天気の日に、会いましょう。
@@ -788,26 +868,123 @@ export default function Home() {
               className="text-lg text-indigo-200 mb-8 fade-in-up"
               style={{ transitionDelay: '100ms' }}
             >
-              Amayadoriは現在、最初の特別な天気を待っています。
+              Amayadoriに関する<span className="font-bold">お問い合わせ</span>や
+              <span className="font-bold">機能のご要望</span>はこちらからお送りください。
               <br />
-              メールアドレスを登録して、アプリのリリースや最新情報をいち早く受け取りませんか？
+              いただいた内容は、開発・運営の改善に活かします。
             </p>
+
+            {/* 成功/エラー表示 */}
+            {done && (
+              <div className="glass-effect rounded-xl p-4 mb-6 text-green-300">
+                送信ありがとうございました。内容を受け付けました。
+              </div>
+            )}
+            {error && (
+              <div className="glass-effect rounded-xl p-4 mb-6 text-red-300">
+                {error}
+              </div>
+            )}
+
             <form
-              className="w-full max-w-lg mx-auto flex flex-col sm:flex-row gap-4 fade-in-up"
+              onSubmit={onSubmitContact}
+              className="w-full max-w-lg mx-auto flex flex-col gap-4 fade-in-up text-left"
               style={{ transitionDelay: '200ms' }}
             >
+              {/* honeypot */}
               <input
-                type="email"
-                placeholder="your.email@example.com"
-                required
-                className="flex-grow bg-gray-700 border border-gray-600 rounded-full px-6 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all w-full"
+                type="text"
+                value={hp}
+                onChange={(e) => setHp(e.target.value)}
+                className="hidden"
+                tabIndex={-1}
+                autoComplete="off"
               />
-              <button
-                type="submit"
-                className="bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition-all duration-300 shadow-lg shadow-indigo-500/30 w-full sm:w-auto"
-              >
-                登録する
-              </button>
+
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="flex-1">
+                  <label className="block text-sm text-gray-400 mb-1">お名前（任意）</label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-full px-5 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    placeholder="雨宿り 太郎"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-sm text-gray-400 mb-1">メール（任意・返信の必要がある場合）</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-full px-5 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    placeholder="your.email@example.com"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">カテゴリ</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="category"
+                      checked={category === '問い合わせ'}
+                      onChange={() => setCategory('問い合わせ')}
+                      className="accent-indigo-400"
+                    />
+                    問い合わせ
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="category"
+                      checked={category === '要望'}
+                      onChange={() => setCategory('要望')}
+                      className="accent-indigo-400"
+                    />
+                    要望
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">内容</label>
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  required
+                  rows={6}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="お問い合わせ・ご要望の内容をご記入ください。"
+                />
+              </div>
+
+              <label className="flex items-start gap-3 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={agree}
+                  onChange={(e) => setAgree(e.target.checked)}
+                  className="mt-1 accent-indigo-400"
+                  required
+                />
+                <span>
+                  <Link href="/terms" className="underline text-indigo-300">利用規約</Link> と{' '}
+                  <Link href="/privacy" className="underline text-indigo-300">プライバシーポリシー</Link> に同意します。
+                </span>
+              </label>
+
+              <div className="text-center">
+                <button
+                  type="submit"
+                  disabled={sending}
+                  className="bg-indigo-500 disabled:bg-indigo-800 disabled:opacity-60 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition-all duration-300 shadow-lg shadow-indigo-500/30 w-full sm:w-auto"
+                >
+                  {sending ? '送信中...' : '送信する'}
+                </button>
+              </div>
             </form>
           </div>
         </section>
@@ -815,8 +992,17 @@ export default function Home() {
 
       {/* フッター */}
       <footer className="py-8 px-4">
-        <div className="container mx-auto text-center text-sm text-gray-500">
+        <div className="container mx-auto text-center text-sm text-gray-500 space-y-2">
           <p>&copy; 2025 Amayadori Project. All rights reserved.</p>
+          <div className="flex items-center justify-center gap-3">
+            <Link href="/terms" prefetch={false} className="hover:text-gray-300 underline">
+              利用規約
+            </Link>
+            <span>・</span>
+            <Link href="/policy" prefetch={false} className="hover:text-gray-300 underline">
+              プライバシーポリシー
+            </Link>
+          </div>
         </div>
       </footer>
     </div>
