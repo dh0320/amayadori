@@ -394,7 +394,7 @@ export default function TermsPage() {
               利用規約
             </Link>
             <span className="text-gray-600">/</span>
-            <Link href="/privacy" className="hover:underline">
+            <Link href="/policy" className="hover:underline">
               プライバシーポリシー
             </Link>
           </div>
