@@ -431,21 +431,47 @@ export default function Page() {
     }
   }
 
-  // 待機 → オーナー（モック）に切り替えるときは必ずキャンセル
+//  // 待機 → オーナー（モック）に切り替えるときは必ずキャンセル
   async function startChatWithOwner() {
-    await cancelCurrentEntry();            // ★ 確実にキャンセル
-    setOwnerPrompt(false);
-    playDoor();
-    setRoomName('Cafe Amayadori');
-    setUserCount('オーナーとあなた');
-    setTimeout(() => {
-      setScreen('chat');
-      setTimeout(() => {
-        addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
-        setTimeout(() => setShowSuggestions(true), 500);
-      }, 500);
-    }, 600);
+//    await cancelCurrentEntry();            // ★ 確実にキャンセル
+//    setOwnerPrompt(false);
+//    playDoor();
+//    setRoomName('Cafe Amayadori');
+//    setUserCount('オーナーとあなた');
+//    setTimeout(() => {
+//      setScreen('chat');
+//      setTimeout(() => {
+//        addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
+//        setTimeout(() => setShowSuggestions(true), 500);
+//      }, 500);
+//    }, 600);
+//  }
+
+  await cancelCurrentEntry(); // 待機キャンセル
+  setOwnerPrompt(false);
+  await ensureAnon();
+  try {
+    const fns = getFunctions(undefined, 'asia-northeast1');
+    const profile = {
+      nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+      profile:  userProfile  || localStorage.getItem('amayadori_profile')  || '...',
+      icon:     userIcon     || localStorage.getItem('amayadori_icon')     || DEFAULT_USER_ICON,
+    };
+    const res = await httpsCallable(fns, 'startOwnerRoom')({ profile }) as any;
+    const roomId = res?.data?.roomId as string | undefined;
+    if (roomId) {
+      playDoor();
+      setTimeout(() => { router.push(`/chat?room=${encodeURIComponent(roomId)}`); }, 600);
+      return;
+    }
+  } catch (e) {
+    console.error('[startOwnerRoom] failed, fallback to mock', e);
   }
+  // フォールバック（万一Functions不調時のみ）
+  playDoor();
+  setRoomName('Cafe Amayadori'); setUserCount('オーナーとあなた');
+  setTimeout(() => { setScreen('chat'); setTimeout(() => { addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON); setTimeout(() => setShowSuggestions(true), 500); }, 500); }, 600);
+ }
 
   // 待機をやめる（ボタン）
   async function abortWaiting() {
@@ -555,7 +581,7 @@ export default function Page() {
       </div>
 
       {/* メイン */}
-      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify中心 p-4">
+      <div id="app-container" className="relative z-10 w-full h-full flex items-center justify-center p-4">
         {/* プロフィール */}
         {screen === 'profile' && (
           <div id="profile-screen" className="w-full max-w-sm">
@@ -607,7 +633,7 @@ export default function Page() {
                 <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient" onClick={() => handleJoin('country')}>
                   同じ国の人と
                 </button>
-                <button className="w-full text白 font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
+                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
                   世界中の誰かと
                 </button>
 
