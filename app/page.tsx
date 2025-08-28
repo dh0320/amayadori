@@ -213,12 +213,12 @@ export default function Home() {
           <div className="absolute inset-0 bg-black opacity-30" />
           <div className="z-10">
             <h2 className="text-4xl md:text-6xl font-serif font-bold leading-tight mb-4 text-glow">
-              億劫な天気の音が、<br />
-              誰かの声に変わる。
+              外に出られない日が、<br />
+              最高の出会いの日になる。
             </h2>
             <p className="text-lg md:text-xl text-indigo-100 mb-8 max-w-2xl mx-auto font-serif">
-              雨の日、猛暑の日、凍えるような寒い日。<br />
-              そんな外出が億劫な日が、見知らぬ誰かとの束の間の出会いの舞台になる。
+              雨の日、暑い日、寒い日。<br />
+              そんな外出が億劫な日が、見知らぬ誰かとの出会いの舞台になる。
             </p>
             {/* ここを「Amayadoriを始める」→ /amayadori へ遷移 */}
             <Link
@@ -234,7 +234,7 @@ export default function Home() {
         <section className="py-20 md:py-32 px-4">
           <div className="container mx-auto text-center">
             <h3 className="text-3xl md:text-4xl font-serif font-bold mb-12 fade-in-up">
-              こんな気持ち、ありませんか？
+            気分が曇る日、少しだけ話そう。
             </h3>
             <div className="grid md:grid-cols-3 gap-8">
               {/* Card 1 */}
@@ -258,10 +258,10 @@ export default function Home() {
                   <path d="M8 12h8" />
                   <path d="M12 8v8" />
                 </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">退屈な毎日</h4>
+                <h4 className="text-xl font-bold mb-2 font-serif">退屈に、ひと声。</h4>
                 <p className="text-indigo-200">
-                  同じことの繰り返し。<br />
-                  何か新しい刺激がほしい。
+                 同じ空の下の誰かと。<br />
+                 短い会話で、気分転換。
                 </p>
               </div>
               {/* Card 2 */}
@@ -284,10 +284,10 @@ export default function Home() {
                   <path d="M18 6 6 18" />
                   <path d="m6 6 12 12" />
                 </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">SNS疲れ</h4>
+                <h4 className="text-xl font-bold mb-2 font-serif">いいねもフォローも不要</h4>
                 <p className="text-indigo-200">
-                  「いいね」やフォロワーを気にするのに、<br />
-                  少し疲れちゃった。
+                 誰かのいいねのためじゃない、<br />
+                 ありのままの言葉で話せる場所
                 </p>
               </div>
               {/* Card 3 */}
@@ -313,11 +313,11 @@ export default function Home() {
                   <path d="M16 12h.01" />
                 </svg>
                 <h4 className="text-xl font-bold mb-2 font-serif">
-                  誰かと話したい、でも…
+                  気兼ねなく誰かと話す
                 </h4>
                 <p className="text-indigo-200">
-                  気兼ねなく話したいけど、<br />
-                  人間関係は少し面倒。
+                 その場限りで、気楽に話せる。<br />
+                 面倒な人間関係もいらない。
                 </p>
               </div>
             </div>
@@ -344,7 +344,7 @@ export default function Home() {
               >
                 Amayadoriは、あなたの現在地が雨・猛暑・極寒など、
                 <br />
-                特別な気象条件の時だけアクセスできる、完全匿名のチャットアプリです。
+                外出するのが憂鬱な天気の時だけアクセスできる、匿名のチャットアプリです。
               </p>
             </div>
 
@@ -372,10 +372,10 @@ export default function Home() {
                   </svg>
                 </div>
                 <h4 className="text-2xl font-serif font-bold mb-2">
-                  一期一会の出会い
+                  雨宿りカフェ、誰かと一息。
                 </h4>
                 <p className="text-indigo-200">
-                  天候が変わると、チャットルームは泡のように消える。会話のログも残りません。その瞬間にしかない、儚い繋がりを楽しんで。
+                  同じ天気の人と相席トーク。誰もいない時は、気さくなカフェのオーナーAIがあたたかく話し相手に。
                 </p>
               </div>
               {/* Feature 2 */}
@@ -398,10 +398,10 @@ export default function Home() {
                   </svg>
                 </div>
                 <h4 className="text-2xl font-serif font-bold mb-2">
-                  心安らぐ匿名性
+                  飾らず、一期一会。
                 </h4>
                 <p className="text-indigo-200">
-                  プロフィール登録は一切不要。ニックネームは自動で割り振られます。あなたは「傘を忘れた人」や「窓を叩く雨音」になるかもしれません。
+                  本名も肩書もいりません。天気が変われば会話はそっと消えるから、本音だけを置いていける。
                 </p>
               </div>
               {/* Feature 3 */}
@@ -424,10 +424,10 @@ export default function Home() {
                   </svg>
                 </div>
                 <h4 className="text-2xl font-serif font-bold mb-2">
-                  同じ状況下の共感
+                  同じ空の下の共感。
                 </h4>
                 <p className="text-indigo-200">
-                  ここにいるのは、みんな同じ状況を過ごす人たち。「この天気、すごいね」その一言から、自然な会話が始まります。
+                雨・猛暑・極寒などの憂鬱な天気。今のあなたと同じ状況の人が集まるから、最初のひと言から自然に話が弾みます。
                 </p>
               </div>
             </div>
@@ -461,10 +461,10 @@ export default function Home() {
                     </div>
                     <div>
                       <h4 className="text-xl font-bold font-serif mb-1">
-                        特別な天気を待つ
+                        空からの合図で、扉は開く
                       </h4>
                       <p className="text-indigo-200">
-                        アプリが使えるのは特別な天気の日だけ。通知をONにしておけば、その時にお知らせします。
+                      雨、暑い日、凍える夜…。空模様がいつもと違う日は、それがカフェオープンの合図です。雨宿りのための隠れ家へそっと足を踏み入れてみましょう。
                       </p>
                     </div>
                   </li>
@@ -477,10 +477,10 @@ export default function Home() {
                     </div>
                     <div>
                       <h4 className="text-xl font-bold font-serif mb-1">
-                        シェルターへ
+                        あたたかいカフェで、優しい会話を
                       </h4>
                       <p className="text-indigo-200">
-                        アプリを開くと、同じ状況の人が集う「シェルター」に自動で案内されます。
+                      店内に入ると、偶然同じテーブルについた誰か、あるいは気さくなカフェのオーナーがあなたを迎えます。気の向くままに会話を楽しみましょう。
                       </p>
                     </div>
                   </li>
@@ -493,10 +493,10 @@ export default function Home() {
                     </div>
                     <div>
                       <h4 className="text-xl font-bold font-serif mb-1">
-                        束の間の会話を楽しむ
+                        雨上がりは、お別れの合図
                       </h4>
                       <p className="text-indigo-200">
-                        同じ空の下にいる誰かと、他愛もない話を。普段は言えない本音も、ここなら話せるかも。
+                        会話に満足したり、天気が穏やかさを取り戻し外に出たくなったら、カフェを出る時間です。相手にお別れを告げ気持ちいい外に出ていきましょう。
                       </p>
                     </div>
                   </li>
@@ -504,17 +504,7 @@ export default function Home() {
                     className="flex items-start fade-in-up"
                     style={{ transitionDelay: '400ms' }}
                   >
-                    <div className="text-3xl font-bold font-serif text-indigo-400 mr-6">
-                      4.
-                    </div>
-                    <div>
-                      <h4 className="text-xl font-bold font-serif mb-1">
-                        そして、天気は変わる
-                      </h4>
-                      <p className="text-indigo-200">
-                        天候が穏やかになると、チャットルームは自動的に閉じられます。「また、次の特別な天気の日に」
-                      </p>
-                    </div>
+
                   </li>
                 </ol>
               </div>
@@ -972,7 +962,7 @@ export default function Home() {
                 />
                 <span>
                   <Link href="/terms" className="underline text-indigo-300">利用規約</Link> と{' '}
-                  <Link href="/privacy" className="underline text-indigo-300">プライバシーポリシー</Link> に同意します。
+                  <Link href="/policy" className="underline text-indigo-300">プライバシーポリシー</Link> に同意します。
                 </span>
               </label>
 
