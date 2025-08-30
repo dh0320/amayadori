@@ -77,6 +77,9 @@ export default function Page() {
   const heartbeatTimerRef = useRef<any>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
+  // ★ オーナー遷移中フラグ：待機UI更新を抑止
+  const ownerSwitchingRef = useRef(false);
+
   // チャット（モック）
   const [roomName, setRoomName] = useState('Cafe Amayadori');
   const [userCount, setUserCount] = useState('オーナーとあなた');
@@ -400,6 +403,9 @@ export default function Page() {
 
       // 自分の1件だけを監視 → matched で /chat へ
       entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
+        // ★ オーナー遷移中は待機UIを更新しない（「中断されました」等を出さない）
+        if (ownerSwitchingRef.current) return;
+
         const d = snap.data() as any | undefined;
         if (!d) return;
         if (d.status === 'matched' && d.roomId) {
@@ -433,44 +439,56 @@ export default function Page() {
 
 //  // 待機 → オーナー（モック）に切り替えるときは必ずキャンセル
   async function startChatWithOwner() {
-//    await cancelCurrentEntry();            // ★ 確実にキャンセル
-//    setOwnerPrompt(false);
-//    playDoor();
-//    setRoomName('Cafe Amayadori');
-//    setUserCount('オーナーとあなた');
-//    setTimeout(() => {
-//      setScreen('chat');
-//      setTimeout(() => {
-//        addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
-//        setTimeout(() => setShowSuggestions(true), 500);
-//      }, 500);
-//    }, 600);
-//  }
+    // ★ オーナー遷移モード開始：以降、待機UI更新は抑止
+    ownerSwitchingRef.current = true;
 
-  await cancelCurrentEntry(); // 待機キャンセル
-  setOwnerPrompt(false);
-  await ensureAnon();
-  try {
-    const fns = getFunctions(undefined, 'asia-northeast1');
-    const profile = {
-      nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
-      profile:  userProfile  || localStorage.getItem('amayadori_profile')  || '...',
-      icon:     userIcon     || localStorage.getItem('amayadori_icon')     || DEFAULT_USER_ICON,
-    };
-    const res = await httpsCallable(fns, 'startOwnerRoom')({ profile }) as any;
-    const roomId = res?.data?.roomId as string | undefined;
-    if (roomId) {
-      playDoor();
-      setTimeout(() => { router.push(`/chat?room=${encodeURIComponent(roomId)}`); }, 600);
-      return;
+    // ★ 先に待機関連を停止（購読・HB・提案表示を止める）
+    if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
+    setOwnerPrompt(false);
+    if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+    if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+
+    // （体感を速く）扉アニメを先に開始
+    playDoor();
+
+    // ★ ここで即座にローカルのチャットUIへ切替（見た目だけ先に）
+    setRoomName('Cafe Amayadori');
+    setUserCount('オーナーとあなた');
+    setMsgs([]);
+    setShowSuggestions(false);
+    setTimeout(() => { setScreen('chat'); }, 10);
+
+    // ★ サーバ側のキューを裏で確実に解除（UIはもう待機に戻さない）
+    await cancelCurrentEntry();
+
+    await ensureAnon();
+    try {
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const profile = {
+        nickname: userNickname || localStorage.getItem('amayadori_nickname') || 'あなた',
+        profile:  userProfile  || localStorage.getItem('amayadori_profile')  || '...',
+        icon:     userIcon     || localStorage.getItem('amayadori_icon')     || DEFAULT_USER_ICON,
+      };
+      const res = await httpsCallable(fns, 'startOwnerRoom')({ profile }) as any;
+      const roomId = res?.data?.roomId as string | undefined;
+
+      if (roomId) {
+        // 扉アニメとの整合のためにごく短い遅延ののち、本番チャットに遷移
+        setTimeout(() => { router.replace(`/chat?room=${encodeURIComponent(roomId)}`); }, 150);
+        return;
+      }
+    } catch (e) {
+      console.error('[startOwnerRoom] failed, fallback to mock', e);
+    } finally {
+      // このページに留まる場合のみ解除（/chat に遷移すればアンマウントされる）
+      ownerSwitchingRef.current = false;
     }
-  } catch (e) {
-    console.error('[startOwnerRoom] failed, fallback to mock', e);
-  }
-  // フォールバック（万一Functions不調時のみ）
-  playDoor();
-  setRoomName('Cafe Amayadori'); setUserCount('オーナーとあなた');
-  setTimeout(() => { setScreen('chat'); setTimeout(() => { addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON); setTimeout(() => setShowSuggestions(true), 500); }, 500); }, 600);
+
+    // ★ フォールバック（万一Functions不調時のみ）：ローカルのオーナー会話を開始
+    setTimeout(() => {
+      addOther('いらっしゃい。雨宿りかな？', 'オーナー', OWNER_ICON);
+      setTimeout(() => setShowSuggestions(true), 500);
+    }, 300);
  }
 
   // 待機をやめる（ボタン）
