@@ -229,7 +229,8 @@ export default function ChatPage() {
   const isOwnerRoom = members.includes('ownerAI');
 
   return (
-    <div className="w-full h-full overflow-hidden">
+    // ★ ここだけ変更：テーマクラスを付与
+    <div className="theme-amayadori w-full h-full overflow-hidden">
       {/* 雨（SSR差分を許容） */}
       <div id="rain-container" suppressHydrationWarning>
         {drops.map((d) => (
