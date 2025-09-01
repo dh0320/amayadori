@@ -24,7 +24,7 @@ export default function Home() {
   // 問い合わせ/要望フォームの状態
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
-  const [category, setCategory] = useState<'問い合わせ' | '要望'>('問い合わせ')
+  const [category, setCategory] = useState<'問い合わせ' | '要望' | 'その他'>('問い合わせ')
   const [message, setMessage] = useState('')
   const [agree, setAgree] = useState(false)
   const [sending, setSending] = useState(false)
@@ -69,12 +69,24 @@ export default function Home() {
     }
   }, [])
 
+  function validateEmail(v: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
+  }
+
   async function onSubmitContact(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError(null)
     setDone(false)
 
-    // 基本バリデーション
+    // 基本バリデーション（名前・メールは必須）
+    if (!name.trim()) {
+      setError('お名前を入力してください。')
+      return
+    }
+    if (!email.trim() || !validateEmail(email.trim())) {
+      setError('正しいメールアドレスを入力してください。')
+      return
+    }
     if (!message.trim()) {
       setError('内容を入力してください。')
       return
@@ -97,19 +109,15 @@ export default function Home() {
       await ensureAnon()
       const fns = getFunctions(undefined, 'asia-northeast1')
 
-      // Callable には text 1本で送る（Functions側で整形しやすいように）
-      const text =
-        `【カテゴリ】${category}\n` +
-        `【お名前】${name || '(未記入)'}\n` +
-        `【メール】${email || '(未記入)'}\n` +
-        `【本文】\n${message}`
-
+      // 構造化して送信（Functions 側でメール送信）
       const call = httpsCallable(fns, 'sendContact')
-      await call({ text })
+      await call({ name, email, category, message })
       setDone(true)
       setMessage('')
       setName('')
       setEmail('')
+      setCategory('問い合わせ')
+      setAgree(false)
     } catch (err: any) {
       console.error(err)
       setError('送信に失敗しました。お手数ですが時間をおいて再度お試しください。')
@@ -893,23 +901,29 @@ export default function Home() {
 
               <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-1">
-                  <label className="block text-sm text-gray-400 mb-1">お名前（任意）</label>
+                  <label className="block text-sm text-gray-400 mb-1">お名前（必須）</label>
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full bg-gray-700 border border-gray-600 rounded-full px-5 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     placeholder="雨宿り 太郎"
+                    required
+                    aria-required="true"
+                    autoComplete="name"
                   />
                 </div>
                 <div className="flex-1">
-                  <label className="block text-sm text-gray-400 mb-1">メール（任意・返信の必要がある場合）</label>
+                  <label className="block text-sm text-gray-400 mb-1">メール（必須）</label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full bg-gray-700 border border-gray-600 rounded-full px-5 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     placeholder="your.email@example.com"
+                    required
+                    aria-required="true"
+                    autoComplete="email"
                   />
                 </div>
               </div>
@@ -924,6 +938,7 @@ export default function Home() {
                       checked={category === '問い合わせ'}
                       onChange={() => setCategory('問い合わせ')}
                       className="accent-indigo-400"
+                      required
                     />
                     問い合わせ
                   </label>
@@ -936,6 +951,16 @@ export default function Home() {
                       className="accent-indigo-400"
                     />
                     要望
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="category"
+                      checked={category === 'その他'}
+                      onChange={() => setCategory('その他')}
+                      className="accent-indigo-400"
+                    />
+                    その他
                   </label>
                 </div>
               </div>
