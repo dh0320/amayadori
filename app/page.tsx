@@ -46,7 +46,24 @@ export default function Home() {
       drop.style.animationDuration = `${1.5 + Math.random()}s`
       container.appendChild(drop)
     }
-
+// 追加: ランディングPV送信
+const sentLandingPV = useRef(false);
+useEffect(() => {
+  if (sentLandingPV.current) return;
+  sentLandingPV.current = true;
+  (async () => {
+    try {
+      await ensureAnon();
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const call = httpsCallable(fns, 'trackVisit');
+      // 参照元（document.referrer）は任意
+      await call({ page: 'landing', src: typeof document !== 'undefined' ? document.referrer : '' });
+    } catch {
+      /* noop */
+    }
+  })();
+}, []);
+    
     // スクロールに応じたフェードイン
     const faders = document.querySelectorAll<HTMLElement>('.fade-in-up')
     const appearOptions = {
