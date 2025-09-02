@@ -62,21 +62,27 @@ export default function ChatPage() {
     setDrops(arr);
   }, []);
 
-// 追加: /chat PV送信
-const sentChatPV = useRef(false);
-useEffect(() => {
-  if (sentChatPV.current) return;
-  sentChatPV.current = true;
-  (async () => {
-    try {
-      await ensureAnon();
-      const fns = getFunctions(undefined, 'asia-northeast1');
-      const call = httpsCallable(fns, 'trackVisit');
-      await call({ page: 'chat', src: typeof document !== 'undefined' ? document.referrer : '' });
-    } catch {}
-  })();
-}, []);
-
+  // ====== 追加: Chat ページPV送信（1回だけ） ======
+  const sentChatPV = useRef(false);
+  useEffect(() => {
+    if (!roomId) return;
+    if (sentChatPV.current) return;
+    sentChatPV.current = true;
+    (async () => {
+      try {
+        await ensureAnon();
+        const fns = getFunctions(undefined, 'asia-northeast1');
+        const call = httpsCallable(fns, 'trackVisit');
+        await call({
+          page: 'chat',
+          src: typeof document !== 'undefined' ? document.referrer : '',
+        });
+      } catch {
+        /* noop */
+      }
+    })();
+  }, [roomId]);
+  // ==============================================
 
   // ルーム購読
   useEffect(() => {
