@@ -32,6 +32,27 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [hp, setHp] = useState('') // honeypot（スパム対策）
 
+  // ====== 追加: ランディングPV送信（1回だけ） ======
+  const sentLandingPV = useRef(false)
+  useEffect(() => {
+    if (sentLandingPV.current) return
+    sentLandingPV.current = true
+    ;(async () => {
+      try {
+        await ensureAnon()
+        const fns = getFunctions(undefined, 'asia-northeast1')
+        const call = httpsCallable(fns, 'trackVisit')
+        await call({
+          page: 'landing',
+          src: typeof document !== 'undefined' ? document.referrer : '',
+        })
+      } catch {
+        /* noop */
+      }
+    })()
+  }, [])
+  // =================================================
+
   useEffect(() => {
     // 雨のアニメーション
     const container = rainRef.current
@@ -46,23 +67,6 @@ export default function Home() {
       drop.style.animationDuration = `${1.5 + Math.random()}s`
       container.appendChild(drop)
     }
-// 追加: ランディングPV送信
-const sentLandingPV = useRef(false);
-useEffect(() => {
-  if (sentLandingPV.current) return;
-  sentLandingPV.current = true;
-  (async () => {
-    try {
-      await ensureAnon();
-      const fns = getFunctions(undefined, 'asia-northeast1');
-      const call = httpsCallable(fns, 'trackVisit');
-      // 参照元（document.referrer）は任意
-      await call({ page: 'landing', src: typeof document !== 'undefined' ? document.referrer : '' });
-    } catch {
-      /* noop */
-    }
-  })();
-}, []);
     
     // スクロールに応じたフェードイン
     const faders = document.querySelectorAll<HTMLElement>('.fade-in-up')
@@ -671,7 +675,7 @@ useEffect(() => {
                 <p className="text-indigo-200 mb-6 flex-grow">
                   無料登録で、あなただけのプロフィールを。マッチングしない時は、カフェオーナーのAIと一息。
                 </p>
-                <ul className="space-y-3 text-left">
+                <ul className="space-y-3 text左">
                   <li className="flex items-center">
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
