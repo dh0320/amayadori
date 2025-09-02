@@ -66,21 +66,26 @@ export default function Page() {
     } catch {}
   }, []);
 
-// 追加: /amayadori PV送信
-const sentAmayadoriPV = useRef(false);
-useEffect(() => {
-  if (sentAmayadoriPV.current) return;
-  sentAmayadoriPV.current = true;
-  (async () => {
-    try {
-      await ensureAnon();
-      const fns = getFunctions(undefined, 'asia-northeast1');
-      const call = httpsCallable(fns, 'trackVisit');
-      await call({ page: 'amayadori', src: typeof document !== 'undefined' ? document.referrer : '' });
-    } catch {}
-  })();
-}, []);
-
+  // ====== 追加: AmayadoriページPV送信（1回だけ） ======
+  const sentAmayadoriPV = useRef(false);
+  useEffect(() => {
+    if (sentAmayadoriPV.current) return;
+    sentAmayadoriPV.current = true;
+    (async () => {
+      try {
+        await ensureAnon();
+        const fns = getFunctions(undefined, 'asia-northeast1');
+        const call = httpsCallable(fns, 'trackVisit');
+        await call({
+          page: 'amayadori',
+          src: typeof document !== 'undefined' ? document.referrer : '',
+        });
+      } catch {
+        /* noop */
+      }
+    })();
+  }, []);
+  // ==============================================
 
   // 待機
   const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
@@ -667,7 +672,7 @@ useEffect(() => {
                 <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-gradient" onClick={() => handleJoin('country')}>
                   同じ国の人と
                 </button>
-                <button className="w-full text-white font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
+                <button className="w-full text白 font-bold py-3 px-4 rounded-xl btn-secondary" onClick={() => handleJoin('global')}>
                   世界中の誰かと
                 </button>
 
@@ -842,7 +847,7 @@ useEffect(() => {
         <div id="interstitial-ad-screen" className="fixed inset-0 bg-black/80 z-50 flex-col items-center justify-center flex">
           <div className="bg-gray-800 p-4 rounded-lg text-center">
             <p className="text-sm text-gray-400">広告</p>
-            <div className="w-72 h-96 bg-gray-700 my-2 flex items-center justify-center">
+            <div className="w-72 h-96 bg-gray-700 my-2 flex items中心 justify-center">
               <p>インタースティシャル広告（ダミー）</p>
             </div>
             <button id="close-interstitial-ad" className="mt-2 text-sm text-blue-400" onClick={() => closeInterstitial()}>
