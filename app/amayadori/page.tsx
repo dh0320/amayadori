@@ -66,6 +66,22 @@ export default function Page() {
     } catch {}
   }, []);
 
+// 追加: /amayadori PV送信
+const sentAmayadoriPV = useRef(false);
+useEffect(() => {
+  if (sentAmayadoriPV.current) return;
+  sentAmayadoriPV.current = true;
+  (async () => {
+    try {
+      await ensureAnon();
+      const fns = getFunctions(undefined, 'asia-northeast1');
+      const call = httpsCallable(fns, 'trackVisit');
+      await call({ page: 'amayadori', src: typeof document !== 'undefined' ? document.referrer : '' });
+    } catch {}
+  })();
+}, []);
+
+
   // 待機
   const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
   const [ownerPrompt, setOwnerPrompt] = useState(false);
