@@ -263,7 +263,8 @@ export default function Home() {
         <section className="py-20 md:py-32 px-4">
           <div className="container mx-auto text-center">
             <h3 className="text-3xl md:text-4xl font-serif font-bold mb-12 fade-in-up">
-            気分が曇る日、少しだけ話そう。
+            気分が曇る日、少しだけ話そう。<br />
+            ～こんな気分の時ありませんか？～
             </h3>
             <div className="grid md:grid-cols-3 gap-8">
               {/* Card 1 */}
@@ -289,8 +290,8 @@ export default function Home() {
                 </svg>
                 <h4 className="text-xl font-bold mb-2 font-serif">退屈に、ひと声。</h4>
                 <p className="text-indigo-200">
-                 同じ空の下の誰かと。<br />
-                 短い会話で、気分転換。
+                 憂鬱な気分の時は、<br />
+                 短い会話でも、気分転換したい。
                 </p>
               </div>
               {/* Card 2 */}
@@ -313,10 +314,10 @@ export default function Home() {
                   <path d="M18 6 6 18" />
                   <path d="m6 6 12 12" />
                 </svg>
-                <h4 className="text-xl font-bold mb-2 font-serif">いいねもフォローも不要</h4>
+                <h4 className="text-xl font-bold mb-2 font-serif">いいねやフォローも疲れた</h4>
                 <p className="text-indigo-200">
-                 誰かのいいねのためじゃない、<br />
-                 ありのままの言葉で話せる場所
+                 誰かのいいねを気にするのは、<br />
+                 少し疲れちゃった・・・
                 </p>
               </div>
               {/* Card 3 */}
@@ -342,11 +343,11 @@ export default function Home() {
                   <path d="M16 12h.01" />
                 </svg>
                 <h4 className="text-xl font-bold mb-2 font-serif">
-                  気兼ねなく誰かと話す
+                  誰かと話したい、でも…
                 </h4>
                 <p className="text-indigo-200">
-                 その場限りで、気楽に話せる。<br />
-                 面倒な人間関係もいらない。
+                 気兼ねなく話したいけど、<br />
+                 どう話初めて良いか分からない。
                 </p>
               </div>
             </div>
