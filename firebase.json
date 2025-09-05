@@ -1,0 +1,55 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" ci",
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ],
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ]
+    }
+  ],
+  "hosting": {
+    "public": "out",
+    "ignore": ["**/.*", "**/node_modules/**"],
+    "cleanUrls": true,
+
+    "headers": [
+      {
+        "source": "/_next/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }
+        ]
+      },
+      {
+        "source": "**/*.@(js|css|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }
+        ]
+      },
+      {
+        "source": "**",
+        "headers": [
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        ]
+      }
+    ],
+
+    "rewrites": [
+      {
+        "source": "/api/cancelQueuedEntries",
+        "function": { "functionId": "cancelQueuedEntriesHttp", "region": "asia-northeast1" }
+      },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  }
+}
