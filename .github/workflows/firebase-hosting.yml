@@ -1,0 +1,76 @@
+name: CI/CD (Firebase Hosting & Functions)
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      # ==== 環境変数注入（PR=STG / main=PROD） ====
+      - name: Inject STG env (for PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NP_FB_API_KEY_STG }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NP_FB_AUTH_DOMAIN_STG }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ secrets.NP_FB_PROJECT_ID_STG }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_STG }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
+          echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_STG }}" >> $GITHUB_ENV
+
+      - name: Inject PROD env (for main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NP_FB_API_KEY_PROD }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NP_FB_AUTH_DOMAIN_PROD }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ secrets.NP_FB_PROJECT_ID_PROD }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_PROD }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
+          echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> $GITHUB_ENV
+
+      - name: Build (Next.js export)
+        run: npm run build   # → out/ が生成される（next.config.js の output: 'export' 前提）
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      # ==== PR：プレビューチャンネルへデプロイ（stg） ====
+      - name: Deploy Preview
+        if: github.event_name == 'pull_request'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          firebase hosting:channel:deploy pr-${{ github.event.number }} \
+            --expires 7d \
+            --project "$FIREBASE_DEPLOY_PROJECT"
+
+      # ==== main：本番へ Hosting + Functions 同時デプロイ ====
+      - name: Deploy Production
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          # functions は firebase.json の predeploy で自動ビルドされます
+          firebase deploy --only hosting,functions --project "$FIREBASE_DEPLOY_PROJECT"
