@@ -38,5 +38,6 @@
     ".next",
     "node_modules",
     "**/*.test.*"
+    "functions/**"        // ★ これを追加
   ]
 }
