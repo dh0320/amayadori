@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   addDoc,
@@ -27,7 +27,7 @@ type Drop = { i: number; x: number; delay: number; duration: number; width: numb
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
 
-export default function ChatPage() {
+function ChatPageInner() {
   const r = useRouter();
   const sp = useSearchParams();
   const roomId = sp.get('room') || '';
@@ -416,7 +416,7 @@ export default function ChatPage() {
 
       {/* 退室後広告 */}
       {showPostLeaveAd && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center">
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items中心 justify-center">
           <div className="glass-card p-6 w-full max-w-md text-center space-y-4">
             <p className="text-sm text-gray-400">広告</p>
             <div className="w-full h-96 bg-gray-700/80 rounded-xl flex items-center justify-center">
@@ -427,5 +427,13 @@ export default function ChatPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<div />}>
+      <ChatPageInner />
+    </Suspense>
   );
 }
