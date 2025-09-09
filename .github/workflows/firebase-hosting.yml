@@ -53,8 +53,9 @@ jobs:
       - name: Build (Next.js export)
         run: npm run build   # → out/ が生成される（next.config.js の output: 'export' 前提）
 
-      - name: Install Firebase CLI
-        run: npm i -g firebase-tools
+      # Firebase CLI は最新版を使用（artifacts:setpolicy を安定して使うため）
+      - name: Install latest Firebase CLI
+        run: npm i -g firebase-tools@latest
 
       # ==== PR：プレビューチャンネルへデプロイ（stg） ====
       - name: Deploy Preview
@@ -66,6 +67,19 @@ jobs:
             --expires 7d \
             --project "$FIREBASE_DEPLOY_PROJECT"
 
+      # ==== 本番デプロイ前：Functions のアーティファクト クリーンアップポリシーを設定（一度だけ） ====
+      - name: Set Functions artifacts cleanup policy (once)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          firebase functions:artifacts:setpolicy \
+            --project "$FIREBASE_DEPLOY_PROJECT" \
+            --location asia-northeast1 \
+            --retention-days 14 \
+            --keep-min-versions 3 \
+            --non-interactive || true
+
       # ==== main：本番へ Hosting + Functions 同時デプロイ ====
       - name: Deploy Production
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -73,4 +87,4 @@ jobs:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
           # functions は firebase.json の predeploy で自動ビルドされます
-          firebase deploy --only hosting,functions --project "$FIREBASE_DEPLOY_PROJECT"
+          firebase deploy --only hosting,functions --project "$FIREBASE_DEPLOY_PROJECT" --non-interactive
