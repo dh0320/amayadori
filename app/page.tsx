@@ -6,6 +6,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Inter, Noto_Serif_JP } from 'next/font/google'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { ensureAnon } from '@/lib/firebase'
+import dynamic from 'next/dynamic'
+
+// 広告コンポーネント（クライアントのみ描画）
+const AdBox = dynamic(() => import('@/components/AdBox'), { ssr: false })
 
 const inter = Inter({
   subsets: ['latin'],
@@ -146,6 +150,12 @@ export default function Home() {
       setSending(false)
     }
   }
+
+  // === 広告の環境変数（Secrets→Actionsから注入） ===
+  const adsClient = process.env.NEXT_PUBLIC_ADS_CLIENT || ''
+  const adsSlotTop = process.env.NEXT_PUBLIC_ADS_SLOT_TOP || ''
+  // プレビュー（PR）ではテスト広告を出す
+  const isPreview = process.env.NEXT_PUBLIC_DEPLOY_TARGET !== 'prod'
 
   return (
     <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
@@ -877,6 +887,20 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        {/* ===== 広告（問い合わせセクションの直前・1箇所のみ） ===== */}
+        {adsClient && adsSlotTop && (
+          <div className="container mx-auto px-4" style={{ margin: '24px 0' }}>
+            <AdBox
+              clientId={adsClient}
+              slotId={adsSlotTop}
+              test={isPreview}
+              reserveMinHeight={280}
+              className="block"
+            />
+          </div>
+        )}
+        {/* ===================================================== */}
 
         {/* 問い合わせ/要望 セクション */}
         <section id="contact" className="py-20 md:py-32 px-4">

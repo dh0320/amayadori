@@ -39,7 +39,27 @@ jobs:
           echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_STG }}" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
           echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_STG }}" >> $GITHUB_ENV
+          # ← 広告：PR(プレビュー)ではテスト配信
+          echo "NEXT_PUBLIC_ADS_TEST=1" >> $GITHUB_ENV
 
+      # （抜粋）PR用
+      - name: Inject STG env (for PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          # ...既存の Firebase 変数...
+          echo "NEXT_PUBLIC_ADS_TEST=1" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_ADS_CLIENT=${{ secrets.NP_ADS_CLIENT }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_ADS_SLOT_TOP=${{ secrets.NP_ADS_SLOT_TOP }}" >> $GITHUB_ENV
+
+      # （抜粋）main用
+      - name: Inject PROD env (for main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # ...既存の Firebase 変数...
+          echo "NEXT_PUBLIC_ADS_TEST=0" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_ADS_CLIENT=${{ secrets.NP_ADS_CLIENT }}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_ADS_SLOT_TOP=${{ secrets.NP_ADS_SLOT_TOP }}" >> $GITHUB_ENV
+    
       # ※ re-run 等でも確実に走るように「main なら実行」に単純化
       - name: Inject PROD env (for main)
         if: github.ref == 'refs/heads/main'
@@ -50,6 +70,8 @@ jobs:
           echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_PROD }}" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
           echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> $GITHUB_ENV
+          # ← 広告：本番では通常配信
+          echo "NEXT_PUBLIC_ADS_TEST=0" >> $GITHUB_ENV
 
       - name: Build (Next.js export)
         run: npm run build   # → out/ が生成される（next.config.js の output: 'export' 前提）
