@@ -39,6 +39,8 @@ jobs:
           echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_STG }}" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
           echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_STG }}" >> $GITHUB_ENV
+          # ← 広告：PR(プレビュー)ではテスト配信
+          echo "NEXT_PUBLIC_ADS_TEST=1" >> $GITHUB_ENV
 
       # ※ re-run 等でも確実に走るように「main なら実行」に単純化
       - name: Inject PROD env (for main)
@@ -50,6 +52,8 @@ jobs:
           echo "NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NP_FB_APP_ID_PROD }}" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_FUNCTIONS_REGION=asia-northeast1" >> $GITHUB_ENV
           echo "FIREBASE_DEPLOY_PROJECT=${{ secrets.FIREBASE_PROJECT_ID_PROD }}" >> $GITHUB_ENV
+          # ← 広告：本番では通常配信
+          echo "NEXT_PUBLIC_ADS_TEST=0" >> $GITHUB_ENV
 
       - name: Build (Next.js export)
         run: npm run build   # → out/ が生成される（next.config.js の output: 'export' 前提）
