@@ -154,6 +154,8 @@ export default function Home() {
   // === 広告の環境変数（Secrets→Actionsから注入） ===
   const adsClient = process.env.NEXT_PUBLIC_ADS_CLIENT || ''
   const adsSlotTop = process.env.NEXT_PUBLIC_ADS_SLOT_TOP || ''
+  // プレビュー（PR）ではテスト広告を出す
+  const isPreview = process.env.NEXT_PUBLIC_DEPLOY_TARGET !== 'prod'
 
   return (
     <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
@@ -334,7 +336,7 @@ export default function Home() {
                 style={{ transitionDelay: '300ms' }}
               >
                 <svg
-                  xmlns="http://www.w3.org/2000/svg"
+                  xmlns="http://www.w3.org/200/svg"
                   width="48"
                   height="48"
                   viewBox="0 0 24 24"
@@ -889,7 +891,13 @@ export default function Home() {
         {/* ===== 広告（問い合わせセクションの直前・1箇所のみ） ===== */}
         {adsClient && adsSlotTop && (
           <div className="container mx-auto px-4" style={{ margin: '24px 0' }}>
-            <AdBox client={adsClient} slot={adsSlotTop} style={{ display: 'block', minHeight: 280 }} />
+            <AdBox
+              clientId={adsClient}
+              slotId={adsSlotTop}
+              test={isPreview}
+              reserveMinHeight={280}
+              className="block"
+            />
           </div>
         )}
         {/* ===================================================== */}
