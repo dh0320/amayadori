@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ja">
       <head>
         {/* AdSense サイト所有権の確認（メタタグ方式） */}
-        <meta name="google-adsense-account" content="ca-pub-XXX" />
+        <meta name="google-adsense-account" content="ca-pub-5996393131507547" />
       </head>
       {/* 背景・文字色は globals.css で統一。フォント変数はここで一括適用 */}
       <body className={`min-h-screen ${inter.variable} ${notoSerif.variable}`}>
