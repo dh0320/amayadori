@@ -19,35 +19,59 @@
   ],
   "hosting": {
     "public": "out",
-    "ignore": ["**/.*", "**/node_modules/**"],
+    "ignore": [
+      "**/.*",
+      "**/node_modules/**"
+    ],
     "cleanUrls": true,
     "headers": [
       {
         "source": "/_next/**",
         "headers": [
-          { "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=31536000,immutable"
+          }
         ]
       },
       {
         "source": "**/*.@(js|css|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)",
         "headers": [
-          { "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=31536000,immutable"
+          }
         ]
       },
       {
         "source": "**",
         "headers": [
-          { "key": "X-Content-Type-Options", "value": "nosniff" },
-          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          }
         ]
       }
     ],
     "rewrites": [
       {
         "source": "/api/cancelQueuedEntries",
-        "function": { "functionId": "cancelQueuedEntriesHttp", "region": "asia-northeast1" }
+        "function": {
+          "functionId": "cancelQueuedEntriesHttp",
+          "region": "asia-northeast1"
+        }
       },
-      { "source": "**", "destination": "/index.html" }
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules"
   }
 }

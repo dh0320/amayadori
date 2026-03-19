@@ -3,12 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  addDoc,
-  collection,
   doc,
   onSnapshot,
-  serverTimestamp,
-  Timestamp,
 } from 'firebase/firestore';
 import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth, db, ensureAnon } from '@/lib/firebase';
@@ -34,6 +30,33 @@ type Msg = { id: string; text: string; isMe: boolean; nickname?: string; icon?: 
 type Drop = { i: number; x: number; delay: number; duration: number; width: number; height: number };
 
 const POST_LEAVE_AD_SEC = Number(process.env.NEXT_PUBLIC_POST_LEAVE_AD_SECONDS ?? 20);
+
+type QueueAction = 'join' | 'touch' | 'cancel';
+
+function getCallableCode(error: any): string {
+  return String(error?.code || '').replace(/^functions\//, '');
+}
+
+function getQueueErrorMessage(action: QueueAction, error: any): string {
+  const code = getCallableCode(error);
+  if (action === 'join') {
+    if (code === 'resource-exhausted') return '退室直後のため、少し待ってから再試行してください。';
+    if (code === 'failed-precondition') return 'いまは待機を開始できない状態です。条件をご確認のうえ、もう一度お試しください。';
+    if (code === 'unavailable') return '現在サーバー側で待機を開始できません。時間をおいて再試行してください。';
+    if (code === 'unauthenticated') return '認証の準備が整わなかったため、もう一度お試しください。';
+  }
+  if (action === 'touch') {
+    if (code === 'failed-precondition') return '待機状態が更新できなくなりました。もう一度入り直してください。';
+    if (code === 'permission-denied') return 'この待機状態は更新できませんでした。';
+    if (code === 'unavailable') return '待機状態の更新に失敗しました。時間をおいて再試行してください。';
+  }
+  if (action === 'cancel') {
+    if (code === 'failed-precondition') return 'この待機はすでに終了している可能性があります。画面を更新して状態をご確認ください。';
+    if (code === 'permission-denied') return 'この待機を終了できませんでした。';
+    if (code === 'unavailable') return '待機の終了処理に失敗しました。時間をおいて再試行してください。';
+  }
+  return '通信に失敗しました。時間をおいて再試行してください。';
+}
 
 // --- Functions の HTTP エンドポイント（sendBeacon 用）を自動生成 ---
 // auth.app.options.projectId を優先。なければ環境変数から。
@@ -89,6 +112,9 @@ export default function Page() {
 
   // 待機
   const [waitingMessage, setWaitingMessage] = useState('マッチング相手を探しています...');
+  const [waitingError, setWaitingError] = useState<string | null>(null);
+  const [lastJoinQueueKey, setLastJoinQueueKey] = useState<'country' | 'global' | null>(null);
+  const [isRetryingJoin, setIsRetryingJoin] = useState(false);
   const [ownerPrompt, setOwnerPrompt] = useState(false);
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -273,35 +299,38 @@ export default function Page() {
 
   // 待機のキャンセル（entryId が無くても必ずフォールバック実行）
   async function cancelCurrentEntry() {
-    if (isCancelling) return;           // 多重実行防止
+    if (isCancelling) return false;
     setIsCancelling(true);
     try {
       await ensureAnon();
       const fns = getFunctions(undefined, 'asia-northeast1');
       const id = entryIdRef.current;
 
-      // 1) 可能なら個別キャンセル
       if (id) {
-        try {
-          await httpsCallable(fns, 'cancelEntry')({ entryId: id });
-        } catch (e) {
-          console.warn('[cancelEntry] callable failed, fallback next', e);
-        }
+        await httpsCallable(fns, 'cancelEntry')({ entryId: id });
+      } else {
+        await httpsCallable(fns, 'cancelMyQueuedEntries')({});
       }
 
-      // 2) フォールバック：自分の queued を一括キャンセル
-      try {
-        await httpsCallable(fns, 'cancelMyQueuedEntries')({});
-      } catch (e) {
-        console.warn('[cancelMyQueuedEntries] callable failed', e);
-      }
-      // ※ 明示操作時は Callable で十分。Beacon は pagehide 専用に任せます。
-    } catch (e) {
-      console.error('[cancelCurrentEntry] failed', e);
-    } finally {
       entryIdRef.current = null;
       if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
       if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      setWaitingError(null);
+      return true;
+    } catch (e: any) {
+      const code = getCallableCode(e);
+      if (code !== 'failed-precondition') {
+        console.error('[cancelCurrentEntry] failed', e);
+        setWaitingError(getQueueErrorMessage('cancel', e));
+        return false;
+      }
+
+      entryIdRef.current = null;
+      if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+      if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
+      setWaitingError(null);
+      return true;
+    } finally {
       setIsCancelling(false);
     }
   }
@@ -349,6 +378,8 @@ export default function Page() {
 
   // ▼ 待機キュー参加：プロフィール同梱 + ハートビート & キャンセル ▼
   async function handleJoin(queueKey: 'country' | 'global') {
+    setLastJoinQueueKey(queueKey);
+    setIsRetryingJoin(true);
     try {
       const left = remainingCooldownSec();
       if (left > 0) {
@@ -357,14 +388,15 @@ export default function Page() {
       }
 
       await ensureAnon();
-      await ensureIdTokenReady(); // ← 離脱検知用 Beacon に備え、先にトークンを確保
+      await ensureIdTokenReady();
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('auth unavailable');
 
       setOwnerPrompt(false);
+      setWaitingError(null);
+      setWaitingMessage('マッチング相手を探しています...');
       setScreen('waiting');
 
-      // 監視/タイマー停止
       if (entryUnsubRef.current) { entryUnsubRef.current(); entryUnsubRef.current = null; }
       if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
       entryIdRef.current = null;
@@ -376,53 +408,31 @@ export default function Page() {
         icon: userIcon || localStorage.getItem('amayadori_icon') || DEFAULT_USER_ICON,
       };
 
-      let entryId: string | undefined;
-      try {
-        const res = (await fn({ queueKey, profile })) as any;
-        const status = res?.data?.status as string | undefined;
-        if (status === 'denied') {
-          setWaitingMessage('今日は条件外でした');
-          setTimeout(() => setScreen('region'), 2000);
-          return;
-        }
-        if (status === 'cooldown') {
-          const leftServer = Number(res?.data?.retryAfterSec ?? 30);
-          try { localStorage.setItem('amayadori_cd_until', String(Date.now() + leftServer * 1000)); } catch {}
-          startPostLeaveAd(leftServer, queueKey);
-          return;
-        }
-        entryId = res?.data?.entryId as string | undefined;
-      } catch (err) {
-        console.warn('[enter] callable error, fallback to client entry', err);
-      }
-
+      const res = (await fn({ queueKey, profile })) as any;
+      const entryId = res?.data?.entryId as string | undefined;
       if (!entryId) {
-        const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 2));
-        const ref = await addDoc(collection(db, 'matchEntries'), {
-          uid,
-          queueKey,
-          status: 'queued',
-          createdAt: serverTimestamp(),
-          lastSeenAt: serverTimestamp(),
-          expiresAt,
-          source: 'client-fallback',
-          profile,
-        });
-        entryId = ref.id;
+        throw new Error('enter returned without entryId');
       }
 
-      // entryId を保持
       entryIdRef.current = entryId;
 
-      // ハートビート（10秒おきに lastSeenAt 更新）
       const touch = httpsCallable(getFunctions(undefined, 'asia-northeast1'), 'touchEntry');
       heartbeatTimerRef.current = setInterval(() => {
         const id = entryIdRef.current;
         if (!id) return;
-        touch({ entryId: id }).catch(() => {});
+        touch({ entryId: id }).catch((err) => {
+          const code = getCallableCode(err);
+          console.warn('[touchEntry] callable failed', err);
+          if (code === 'failed-precondition' || code === 'permission-denied' || code === 'unavailable') {
+            if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+            entryIdRef.current = null;
+            setWaitingMessage('待機が中断されました。');
+            setWaitingError(getQueueErrorMessage('touch', err));
+            setOwnerPrompt(false);
+          }
+        });
       }, 10_000);
 
-      // 自分の1件だけを監視 → matched で /chat へ
       entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
         // ★ オーナー遷移中は待機UIを更新しない（「中断されました」等を出さない）
         if (ownerSwitchingRef.current) return;
@@ -443,18 +453,31 @@ export default function Page() {
           setTimeout(() => setScreen('region'), 2000);
         }
         if (d.status === 'stale' || d.status === 'canceled' || d.status === 'expired') {
-          setWaitingMessage('待機が中断されました。もう一度お試しください。');
-          setTimeout(() => setScreen('region'), 1500);
+          setWaitingMessage('待機が中断されました。');
+          setWaitingError('待機状態が終了したため、再度参加してください。');
+          setOwnerPrompt(false);
+          if (heartbeatTimerRef.current) { clearInterval(heartbeatTimerRef.current); heartbeatTimerRef.current = null; }
+          entryIdRef.current = null;
         }
       });
 
-      // 20秒でオーナー提案
       if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
       waitingTimerRef.current = setTimeout(() => setOwnerPrompt(true), 20000);
     } catch (e: any) {
-      console.error(e);
-      alert(e?.message || '入室に失敗しました');
-      setScreen('region');
+      console.error('[enter] failed', e);
+      const code = getCallableCode(e);
+      const retryAfterSec = Number(e?.details?.retryAfterSec ?? 0);
+      setWaitingMessage('待機を開始できませんでした。');
+      setWaitingError(getQueueErrorMessage('join', e));
+      setOwnerPrompt(false);
+      if (code === 'resource-exhausted' && retryAfterSec > 0) {
+        try { localStorage.setItem('amayadori_cd_until', String(Date.now() + retryAfterSec * 1000)); } catch {}
+        startPostLeaveAd(retryAfterSec, queueKey);
+        return;
+      }
+      setScreen('waiting');
+    } finally {
+      setIsRetryingJoin(false);
     }
   }
 
@@ -514,8 +537,8 @@ export default function Page() {
 
   // 待機をやめる（ボタン）
   async function abortWaiting() {
-    await cancelCurrentEntry();
-    setScreen('region');
+    const ok = await cancelCurrentEntry();
+    if (ok) setScreen('region');
   }
 
   // ダミー広告（リワード）
@@ -699,6 +722,28 @@ export default function Page() {
               </div>
               <h2 id="waiting-message" className="text-2xl font-bold">{waitingMessage}</h2>
               <p className="text-sm text-gray-400">雨の中、誰かが来るのを待っています。</p>
+
+              {waitingError && (
+                <div className="rounded-xl border border-red-400/40 bg-red-500/10 p-4 text-left text-sm text-red-100 space-y-3">
+                  <p>{waitingError}</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      className="rounded-lg bg-white/10 px-4 py-2 font-semibold text-white disabled:opacity-50"
+                      onClick={() => lastJoinQueueKey && handleJoin(lastJoinQueueKey)}
+                      disabled={!lastJoinQueueKey || isRetryingJoin || isCancelling}
+                    >
+                      {isRetryingJoin ? '再試行中...' : 'もう一度試す'}
+                    </button>
+                    <button
+                      className="rounded-lg border border-white/20 px-4 py-2 text-white/90"
+                      onClick={() => setScreen('region')}
+                      disabled={isCancelling}
+                    >
+                      エントランスへ戻る
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* 待機をやめる */}
               <button
