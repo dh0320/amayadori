@@ -3,20 +3,8 @@
 
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
-import { Inter, Noto_Serif_JP } from 'next/font/google'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { ensureAnon } from '@/lib/firebase'
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
-
-const notoSerifJP = Noto_Serif_JP({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-noto-serif-jp',
-})
 
 export default function Home() {
   const rainRef = useRef<HTMLDivElement | null>(null)
@@ -148,7 +136,7 @@ export default function Home() {
   }
 
   return (
-    <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
+    <div className="w-full">
       {/* グローバルスタイル（HTMLの<style>を移植） */}
       <style jsx global>{`
         html, body {

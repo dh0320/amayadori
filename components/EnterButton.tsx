@@ -19,8 +19,9 @@ async function matchOnFirestore(params: {
   waitMs?: number
 }): Promise<string | null> {
   const { region, lat, lon, waitMs = 20_000 } = params
-  const me = auth.currentUser?.uid
-  if (!me) throw new Error('not signed in')
+  const user = await ensureAnon()
+  const me = user.uid
+  if (!db) throw new Error('firestore unavailable')
 
   // ---- 0) 診断ログ（見え方：Firestore の _diag に 1 行増える）
   await addDoc(collection(db, '_diag'), {

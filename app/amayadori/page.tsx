@@ -283,9 +283,9 @@ export default function Page() {
   }
 
   async function ensureIdTokenReady() {
-    await ensureAnon();
+    const user = await ensureAnon();
     try {
-      idTokenRef.current = await auth.currentUser!.getIdToken(false);
+      idTokenRef.current = await user.getIdToken(false);
     } catch {
       idTokenRef.current = null;
     }
@@ -414,6 +414,12 @@ export default function Page() {
   }
 
   function handleEntrySnapshot(entryId: string, joinAttemptKey: string) {
+    if (!db) {
+      setFlow('profile');
+      setUiPatch({ waitingError: '接続設定を確認してください。' });
+      return;
+    }
+
     detachEntryListener('replace');
     entryUnsubRef.current = onSnapshot(doc(db, 'matchEntries', entryId), (snap) => {
       if (activeJoinAttemptRef.current !== joinAttemptKey) return;
@@ -497,7 +503,7 @@ export default function Page() {
 
       await ensureAnon();
       await ensureIdTokenReady();
-      if (!auth.currentUser?.uid) throw new Error('auth unavailable');
+      if (!auth?.currentUser?.uid) throw new Error('auth unavailable');
       await enterQueue(queueKey, joinAttemptKey);
     } catch (e: any) {
       console.error('[enter] failed', e);
@@ -681,6 +687,11 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+      idTokenRef.current = null;
+      return;
+    }
+
     const unsub = auth.onIdTokenChanged(async (u) => {
       if (!u) {
         idTokenRef.current = null;
