@@ -206,16 +206,18 @@ export default function AdminPage() {
   }
 
   // UI：ガード（元のまま）
+  const currentUser = auth?.currentUser;
+
   if (admin === false) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
         <div className="glass-card max-w-md w-full p-8 text-center space-y-4">
           <h1 className="text-2xl font-bold">Access denied</h1>
           <p className="text-sm text-gray-400">このページは管理者のみアクセス可能です。</p>
-          {auth.currentUser && (
+          {currentUser && (
             <div className="text-xs text-gray-500">
-              <p>現在ログイン中: {auth.currentUser.email || '(メール未設定)'}</p>
-              <p>UID: <span className="font-mono">{auth.currentUser.uid}</span></p>
+              <p>現在ログイン中: {currentUser.email || '(メール未設定)'}</p>
+              <p>UID: <span className="font-mono">{currentUser.uid}</span></p>
               <p className="mt-2">Firestore <code>config/admins</code> の <code>uids</code> 配列にこの UID を追加してください。</p>
             </div>
           )}

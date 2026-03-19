@@ -3,18 +3,6 @@
 
 import Link from 'next/link'
 import { useEffect, useRef } from 'react'
-import { Inter, Noto_Serif_JP } from 'next/font/google'
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
-
-const notoSerifJP = Noto_Serif_JP({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-noto-serif-jp',
-})
 
 const LAST_UPDATED = '2025-08-27'
 
@@ -53,7 +41,7 @@ export default function TermsPage() {
   }, [])
 
   return (
-    <div className={`${inter.variable} ${notoSerifJP.variable} w-full`}>
+    <div className="w-full">
       {/* ページ専用グローバルスタイル（ランディングと統一） */}
       <style jsx global>{`
         body {

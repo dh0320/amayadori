@@ -241,8 +241,10 @@ function ChatPageInner() {
     let roomUnsub: (() => void) | null = null;
     let msgUnsub: (() => void) | null = null;
     void (async () => {
-      await ensureAnon();
-      setSyncPatch({ myUid: auth.currentUser?.uid || '' });
+      const currentUser = await ensureAnon();
+      if (!db) return;
+
+      setSyncPatch({ myUid: currentUser.uid || '' });
       setPhase('matched');
 
       roomUnsub = onSnapshot(doc(db, 'rooms', roomId), (roomSnap) => {
@@ -253,7 +255,7 @@ function ChatPageInner() {
           members: nextMembers,
           profiles: (data.profiles || {}) as Record<string, ProfileSnap>,
         });
-        if (auth.currentUser?.uid && nextMembers.length === 1 && nextMembers.includes(auth.currentUser.uid)) {
+        if (currentUser.uid && nextMembers.length === 1 && nextMembers.includes(currentUser.uid)) {
           setUiPatch({ peerLeftNotice: true });
         }
       });
@@ -334,7 +336,8 @@ function ChatPageInner() {
                 if (m.text === '会話相手が退席しました') return null;
                 return <div key={m.id} className="text-center text-gray-400 text-sm italic my-2">{m.text}</div>;
               }
-              const mine = Boolean(auth.currentUser?.uid && m.uid === auth.currentUser.uid);
+              const currentUid = auth?.currentUser?.uid;
+              const mine = Boolean(currentUid && m.uid === currentUid);
               const partnerIcon = you.icon || (partnerUid === 'ownerAI' ? OWNER_ICON : DEFAULT_USER_ICON);
               return (
                 <div key={m.id} className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
