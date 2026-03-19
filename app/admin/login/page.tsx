@@ -38,6 +38,11 @@ export default function AdminLogin() {
 
   // 認証状態を監視。匿名でなければ /admin へ。
   useEffect(() => {
+    if (!auth) {
+      setErr('Firebase 設定が不足しているためログインできません。');
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, (u) => {
       setUid(u?.uid ?? null);
       setIsAnon(!!u?.isAnonymous);
@@ -48,6 +53,7 @@ export default function AdminLogin() {
 
   // 匿名セッションは破棄。永続化は Local 固定。
   useEffect(() => {
+    if (!auth) return;
     if (auth.currentUser?.isAnonymous) signOut(auth).catch(() => {});
     setPersistence(auth, browserLocalPersistence).catch(() => {});
   }, []);
@@ -57,6 +63,7 @@ export default function AdminLogin() {
     setErr(null);
     setBusy(true);
     try {
+      if (!auth) throw new Error('Firebase 設定が不足しています。');
       if (auth.currentUser?.isAnonymous) {
         try {
           const cred = EmailAuthProvider.credential(email.trim(), pw);
@@ -83,7 +90,7 @@ export default function AdminLogin() {
   }
 
   async function doSignOut() {
-    try { await signOut(auth); } catch {}
+    try { if (auth) await signOut(auth); } catch {}
   }
 
   return (

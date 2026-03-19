@@ -77,6 +77,13 @@ export default function AdminPage() {
 
   // 認証/権限ガード：非ログイン or 匿名 → /admin/login、ログイン済は checkAdmin へ
   useEffect(() => {
+    if (!auth) {
+      setErr('Firebase 設定が不足しているため管理画面を表示できません。');
+      setAdmin(false);
+      setReady(true);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, async (u) => {
       setErr(null);
       try {
@@ -106,6 +113,8 @@ export default function AdminPage() {
     try {
       /* ---------- 日次（直近30日） ----------
          まず「元のクエリ」を試し、失敗したらフォールバックで全件→idソート */
+      if (!db) throw new Error('Firebase Firestore is not configured');
+
       let rowsDesc: DailyRow[] = [];
       try {
         const qDaily = query(collection(db, 'metrics_daily'), orderBy(documentId(), 'desc'), limit(30));

@@ -134,8 +134,9 @@ function ChatPageInner() {
     const text = draft.trim();
     if (!text || !roomId || phase !== 'matched') return;
     await ensureAnon();
-    const uid = auth.currentUser?.uid;
+    const uid = auth?.currentUser?.uid;
     if (!uid) return;
+    if (!db) return;
     await addDoc(collection(db, 'rooms', roomId, 'messages'), {
       text,
       uid,
