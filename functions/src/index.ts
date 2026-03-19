@@ -1,6 +1,7 @@
 // functions/src/index.ts
 import * as admin from 'firebase-admin'
 import { onCall, HttpsError, onRequest } from 'firebase-functions/v2/https'
+import * as logger from 'firebase-functions/logger'
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import type { Request, Response } from 'express'
@@ -198,12 +199,42 @@ async function getWeather(_lat?: number, _lon?: number) {
 function isAllowedByPolicy(_w: any) {
   return true
 }
+function sanitizeErrorForLog(error: unknown) {
+  if (error instanceof HttpsError) {
+    return { code: error.code, message: error.message }
+  }
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message }
+  }
+  return { message: String(error) }
+}
+
+async function recordEnterDiagnostic(params: {
+  uid: string
+  queueKey?: string
+  stage: string
+  reason: string
+  code: string
+  region?: string
+  detail?: Record<string, unknown>
+}) {
+  const payload = {
+    uid: params.uid,
+    queueKey: params.queueKey ?? null,
+    stage: params.stage,
+    reason: params.reason,
+    code: params.code,
+    region: params.region ?? null,
+    detail: params.detail ?? {},
+    at: admin.firestore.FieldValue.serverTimestamp(),
+  }
+  logger.error('enter_failure', payload)
+  await db.collection('_diag_enter').add(payload)
+}
 
 /* ============ enter ============ */
 type EnterQueued = { status: 'queued'; entryId: string }
-type EnterDenied = { status: 'denied' }
-type EnterCooldown = { status: 'cooldown'; retryAfterSec: number }
-type EnterRes = EnterQueued | EnterDenied | EnterCooldown
+type EnterRes = EnterQueued
 
 export const enter = onCall(
   { region: 'asia-northeast1' },
@@ -220,11 +251,39 @@ export const enter = onCall(
     }
     if (!queueKey) throw new HttpsError('invalid-argument', 'queueKey required')
 
+    const failEnter = async (args: {
+      code: 'unavailable' | 'failed-precondition' | 'resource-exhausted'
+      reason: string
+      stage: string
+      message: string
+      detail?: Record<string, unknown>
+    }): Promise<never> => {
+      try {
+        await recordEnterDiagnostic({
+          uid,
+          queueKey,
+          stage: args.stage,
+          reason: args.reason,
+          code: args.code,
+          region,
+          detail: args.detail,
+        })
+      } catch (diagError) {
+        logger.error('enter_diag_failed', {
+          uid,
+          queueKey,
+          stage: args.stage,
+          reason: args.reason,
+          diagError: sanitizeErrorForLog(diagError),
+        })
+      }
+      throw new HttpsError(args.code, args.message)
+    }
+
     const cfg = await getConfig()
     const weatherMode = cfg.weatherGateMode ?? 'off'
     const cooldownSec = cfg.cooldownSec ?? DEFAULT_COOLDOWN_SEC
 
-    // クールダウン
     try {
       const st = await db.doc(`userStates/${uid}`).get()
       const lastLeftAt = st.exists ? (st.data() as any).lastLeftAt : null
@@ -234,12 +293,25 @@ export const enter = onCall(
         if (remain > 0) {
           await incDaily({ queue_cooldown_total: 1 })
           await logEvent({ type: 'queue_cooldown', uid, queueKey })
-          return { status: 'cooldown', retryAfterSec: remain }
+          await failEnter({
+            code: 'resource-exhausted',
+            reason: 'cooldown_active',
+            stage: 'cooldown',
+            message: '退室直後のため少し待ってから再度お試しください。',
+            detail: { retryAfterSec: remain },
+          })
         }
       }
-    } catch {}
+    } catch (error) {
+      await failEnter({
+        code: 'unavailable',
+        reason: 'cooldown_check_failed',
+        stage: 'cooldown',
+        message: '待機状態を確認できませんでした。時間をおいて再度お試しください。',
+        detail: sanitizeErrorForLog(error),
+      })
+    }
 
-    // 天候（log-only / enforce）
     if (weatherMode !== 'off') {
       let ok = true
       try {
@@ -254,7 +326,7 @@ export const enter = onCall(
           ok,
           at: admin.firestore.FieldValue.serverTimestamp(),
         })
-      } catch (e) {
+      } catch (error) {
         await db.collection('_diag_weather').add({
           uid,
           lat,
@@ -262,37 +334,51 @@ export const enter = onCall(
           region,
           mode: weatherMode,
           ok: true,
-          error: String(e),
+          error: String(error),
           at: admin.firestore.FieldValue.serverTimestamp(),
         })
       }
       if (weatherMode === 'enforce' && !ok) {
         await incDaily({ queue_denied_total: 1 })
         await logEvent({ type: 'queue_denied', uid, queueKey })
-        return { status: 'denied' }
+        await failEnter({
+          code: 'failed-precondition',
+          reason: 'weather_gate_denied',
+          stage: 'policy',
+          message: '現在の条件では待機を開始できません。',
+          detail: { weatherMode },
+        })
       }
     }
 
-    // matchEntries を作成（プロフィール & lastSeenAt 付き）
-    const entryRef = db.collection('matchEntries').doc()
-    await entryRef.set({
-      uid,
-      queueKey,
-      status: 'queued',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      lastSeenAt: admin.firestore.FieldValue.serverTimestamp(), // 初期ハートビート
-      expiresAt: tsPlusMin(QUEUE_EXPIRE_MIN),
-      profile: sanitizeProfile(profile),
-    })
+    try {
+      const entryRef = db.collection('matchEntries').doc()
+      await entryRef.set({
+        uid,
+        queueKey,
+        status: 'queued',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastSeenAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: tsPlusMin(QUEUE_EXPIRE_MIN),
+        profile: sanitizeProfile(profile),
+      })
 
-    // KPI: キュー投入
-    const inc: Record<string, number> = { queue_enter_total: 1 }
-    if (queueKey === 'country') inc['queue_enter_country_total'] = 1
-    if (queueKey === 'global') inc['queue_enter_global_total'] = 1
-    await incDaily(inc)
-    await logEvent({ type: 'queue_enter', uid, queueKey })
+      const inc: Record<string, number> = { queue_enter_total: 1 }
+      if (queueKey === 'country') inc['queue_enter_country_total'] = 1
+      if (queueKey === 'global') inc['queue_enter_global_total'] = 1
+      await incDaily(inc)
+      await logEvent({ type: 'queue_enter', uid, queueKey })
 
-    return { status: 'queued', entryId: entryRef.id }
+      return { status: 'queued', entryId: entryRef.id }
+    } catch (error) {
+      return await failEnter({
+        code: 'unavailable',
+        reason: 'entry_create_failed',
+        stage: 'write_entry',
+        message: '待機エントリーの作成に失敗しました。時間をおいて再度お試しください。',
+        detail: sanitizeErrorForLog(error),
+      })
+    }
   }
 )
 
@@ -305,19 +391,20 @@ export const touchEntry = onCall({ region: 'asia-northeast1' }, async (req) => {
   if (!entryId) throw new HttpsError('invalid-argument', 'entryId required')
 
   const ref = db.collection('matchEntries').doc(entryId)
-  await db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx) => {
     const s = await tx.get(ref)
-    if (!s.exists) return
+    if (!s.exists) throw new HttpsError('failed-precondition', 'entry_missing')
     const d = s.data() as any
     if (d.uid !== uid) throw new HttpsError('permission-denied', 'not owner')
-    if (d.status !== 'queued') return
+    if (d.status !== 'queued') {
+      throw new HttpsError('failed-precondition', 'entry_not_queued')
+    }
     tx.update(ref, {
       lastSeenAt: nowTs(),
-      // 生かしている間は期限も伸ばす
       expiresAt: tsPlusMin(QUEUE_EXPIRE_MIN),
     })
+    return { ok: true }
   })
-  return { ok: true }
 })
 
 // 待機をやめる（所有者のみ）
@@ -330,19 +417,21 @@ export const cancelEntry = onCall(
     if (!entryId) throw new HttpsError('invalid-argument', 'entryId required')
 
     const ref = db.collection('matchEntries').doc(entryId)
-    await db.runTransaction(async (tx) => {
+    return db.runTransaction(async (tx) => {
       const s = await tx.get(ref)
-      if (!s.exists) return
+      if (!s.exists) throw new HttpsError('failed-precondition', 'entry_missing')
       const d = s.data() as any
       if (d.uid !== uid) throw new HttpsError('permission-denied', 'not owner')
-      if (d.status !== 'queued') return
+      if (d.status !== 'queued') {
+        throw new HttpsError('failed-precondition', 'entry_not_queued')
+      }
       tx.update(ref, {
         status: 'canceled',
         canceledAt: nowTs(),
-        expiresAt: nowTs(), // GC 対象
+        expiresAt: nowTs(),
       })
+      return { ok: true }
     })
-    return { ok: true }
   }
 )
 
@@ -360,7 +449,7 @@ export const cancelMyQueuedEntries = onCall(
       .limit(50)
       .get()
 
-    if (qs.empty) return { canceled: 0 }
+    if (qs.empty) throw new HttpsError('failed-precondition', 'no_queued_entries')
 
     const batch = db.batch()
     qs.docs.forEach((d) => {
