@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -109,6 +110,44 @@ function getQueueErrorMessage(action: QueueAction, error: any): string {
     if (code === 'unavailable') return '待機の終了処理に失敗しました。時間をおいて再試行してください。';
   }
   return '通信に失敗しました。時間をおいて再試行してください。';
+}
+
+
+function AvatarImage({
+  src,
+  alt,
+  className,
+  size,
+  fallbackSrc = DEFAULT_USER_ICON,
+  id,
+}: {
+  src: string;
+  alt: string;
+  className: string;
+  size: number;
+  fallbackSrc?: string;
+  id?: string;
+}) {
+  const [imgSrc, setImgSrc] = useState(src || fallbackSrc);
+
+  useEffect(() => {
+    setImgSrc(src || fallbackSrc);
+  }, [fallbackSrc, src]);
+
+  return (
+    <Image
+      id={id}
+      className={className}
+      src={imgSrc || fallbackSrc}
+      alt={alt}
+      width={size}
+      height={size}
+      unoptimized
+      onError={() => {
+        if (imgSrc !== fallbackSrc) setImgSrc(fallbackSrc);
+      }}
+    />
+  );
 }
 
 function resolveCancelBeaconUrl(): string {
@@ -738,7 +777,7 @@ export default function Page() {
               <p className="text-sm text-gray-400">雨がやむまで、少しだけ。</p>
               <div className="flex justify-center">
                 <label className="cursor-pointer">
-                  <img className="w-28 h-28 rounded-full object-cover border-4 border-dashed border-gray-500 hover:border-gray-400 transition-all" src={userIcon || DEFAULT_USER_ICON} alt="icon preview" />
+                  <AvatarImage className="w-28 h-28 rounded-full object-cover border-4 border-dashed border-gray-500 hover:border-gray-400 transition-all" src={userIcon || DEFAULT_USER_ICON} alt="icon preview" size={112} />
                   <input type="file" accept="image/*" className="hidden" onChange={(e) => onPickIcon(e.target.files?.[0] || undefined)} />
                 </label>
               </div>
@@ -813,7 +852,7 @@ export default function Page() {
           <div id="chat-screen" className="w-full h-full flex flex-col glass-card">
             <header className="w-full p-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center space-x-3">
-                <img id="header-icon" className="w-10 h-10 rounded-full object-cover" src={userIcon || DEFAULT_USER_ICON} alt="user icon" />
+                <AvatarImage id="header-icon" className="w-10 h-10 rounded-full object-cover" src={userIcon || DEFAULT_USER_ICON} alt="user icon" size={40} />
                 <div>
                   <p id="header-name" className="font-bold">{userNickname}</p>
                   <p id="header-profile" className="text-xs text-gray-400">{userProfile}</p>
@@ -830,12 +869,12 @@ export default function Page() {
             <main id="chat-messages" className="flex-1 p-4 overflow-y-auto flex flex-col space-y-4">
               {msgs.map((m) => (
                 <div key={m.id} className={`flex items-end gap-2 ${m.isMe ? 'justify-end' : 'justify-start'}`}>
-                  {!m.isMe && <img className="w-8 h-8 rounded-full object-cover flex-shrink-0" src={m.icon || OWNER_ICON} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON; }} />}
+                  {!m.isMe && <AvatarImage className="w-8 h-8 rounded-full object-cover flex-shrink-0" src={m.icon || OWNER_ICON} alt="" size={32} />}
                   <div className={`chat-bubble ${m.isMe ? 'me' : 'other'}`}>
                     {!m.isMe && <span className="block text-xs font-bold mb-1 text-purple-300">{m.nickname || 'オーナー'}</span>}
                     <p>{m.text}</p>
                   </div>
-                  {m.isMe && <img className="w-8 h-8 rounded-full object-cover flex-shrink-0" src={userIcon || DEFAULT_USER_ICON} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).src = DEFAULT_USER_ICON; }} />}
+                  {m.isMe && <AvatarImage className="w-8 h-8 rounded-full object-cover flex-shrink-0" src={userIcon || DEFAULT_USER_ICON} alt="" size={32} />}
                 </div>
               ))}
             </main>
